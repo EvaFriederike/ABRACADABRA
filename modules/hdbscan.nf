@@ -13,8 +13,8 @@ process hdbscan {
   publishDir "${params.output}/${params.hdbscan_output}", mode: 'copy', pattern: "*_hdbscan_UNCLUSTERED.fasta"
   publishDir "${params.output}/${params.summary_output}/unclustered_sequences", mode: 'copy', pattern: '*UNCLUSTERED.fasta'
   publishDir "${params.output}/${params.summary_output}/clustered_sequences", mode: 'copy', pattern: '*_hdbscan.fasta'
-  publishDir "${params.output}/${params.hdbscan_output}", mode: 'copy', pattern: '*plot.png'
-
+  publishDir "${params.output}/${params.hdbscan_output}", mode: 'copy', pattern: '*.png'
+  publishDir "${params.output}/${params.hdbscan_output}", mode: 'copy', pattern: 'cluster*.fasta'
 
 
   input:
@@ -24,9 +24,10 @@ process hdbscan {
     val(goi)
 
   output:
-    tuple val("${params.output}/${params.hdbscan_output}"), path("${sequences.baseName}_hdbscan.fasta"), path("${sequences.baseName}_hdbscan.fasta.clstr")
-    path "${sequences.baseName}_hdbscan_UNCLUSTERED.fasta"
-    path "*plot.png"
+    tuple val("${params.output}/${params.hdbscan_output}"), path("${sequences.baseName}_hdbscan.fasta"), path("${sequences.baseName}_hdbscan.fasta.clstr"), emit: hdbscan_out
+    path "${sequences.baseName}_hdbscan_UNCLUSTERED.fasta", emit: hdbscan_unclustered
+    path "cluster*.fasta", emit: cluster_fasta_files
+    path "*.png"
     path "hdbscan.log"
 
   script:

@@ -1,0 +1,12 @@
+name:
+  medaka
+channels:
+  - conda-forge
+  - bioconda
+  - defaults  
+dependencies:
+  - medaka=1.7.2
+  - python=3.8
+  - minimap2
+  - samtools
+  
