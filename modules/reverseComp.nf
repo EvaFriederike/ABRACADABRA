@@ -19,8 +19,8 @@ process reverseComp {
   script:
   outpath = "${sequences}".reverse().replaceFirst("positive".reverse(),"negative".reverse()).reverse()
   """
-  echo $sequences
-  python3 ${projectDir}/bin/reverse_complement.py "${sequences}"
+  #!/bin/bash
+  python3 ${baseDir}/bin/reverse_complement.py "${sequences}"
 
   """
 

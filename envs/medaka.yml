@@ -6,7 +6,9 @@ channels:
   - defaults  
 dependencies:
   - medaka=1.7.2
+  - pandas
   - python=3.8
   - minimap2
   - samtools
+  - bamclipper
   

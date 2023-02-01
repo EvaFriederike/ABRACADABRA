@@ -1,46 +1,57 @@
 /************************************************************************
-* REMOVE REDUNDANCY
-*
-* Cluster 100% identical sequences to remove redundancy
+Remove redundant reads and memorize them to re-introduce them after 
+embedding and clustering.
 ************************************************************************/
 
 process remove_redundancy {
   label 'remove'
-  publishDir "${params.output}/${params.nr_output}", mode: 'copy', pattern: "*_nr.fasta"
-
 
   input:
-    path(sequences)
+    tuple val(primer_name), path(primer_fasta)
 
   output:
-    path "${sequences.baseName}_nr.fasta", emit: nr_result
-
+    tuple val(primer_name), path("${primer_name}_nr.fasta"), emit: nr_fasta
+    path '*-duplicate-seqs.fasta', emit: redundancy, optional: true
+    path ".command.out", emit: log
 
   script:
   """
-    #mmseqs easy-linclust --threads ${task.cpus} --min-seq-id 1.0 "${sequences}" "${sequences.baseName}_nr" tmp
-    #mv "${sequences.baseName}_nr_rep_seq.fasta" "${sequences.baseName}_nr.fasta"
-    seqkit rmdup -s -P ${sequences} -o "${sequences.baseName}_nr.fasta"
+    #!/bin/bash
+    amplicon=\$(echo $primer_name | cut -d_ -f2)
+    seqkit rmdup -s -P -d representatives-of-redundancy.fasta -D duplicate-seqs.txt -o "${primer_name}_nr.fasta" ${primer_fasta}
 
+    if [ -f "duplicate-seqs.txt" ]; then
+      python ${baseDir}/bin/write_redundancy.py $primer_fasta duplicate-seqs.txt \${amplicon}-duplicate-seqs.fasta
+    else
+      echo "No redundant reads in ${primer_name}"
+    fi
   """
 }
 
-process concat_goi {
-  label 'concat_goi'
-  publishDir "${params.output}/${params.nr_output}", mode: 'copy', overwrite: true, pattern: "*_nr.fasta"
+
+/************************************************************************
+Re-introduce for lineage detection and abundance estimation.
+************************************************************************/
+process add_redundancy {
+  label 'remove'
 
   input:
-    path(sequences)
-    path(goi)
+    tuple val(amplicon), val(amplicon_size), path(cluster_fasta), path(duplicates_fasta)
 
   output:
-    path "${sequences.baseName}.fasta", emit: nr_result
-
+    tuple val(amplicon), val(amplicon_size), val("redundant_${cluster_fasta.baseName}"), path("redundant_${cluster_fasta}")
+    
   script:
   """
-    for ID in \$(grep '>' ${goi}); do
-        grep -m 1 "\$ID" "${sequences}" || grep -A1 "\$ID" ${goi}  >> "${sequences}"
-    done 
+    #!/bin/bash
     
+    grep '>' $cluster_fasta > tmp.fasta
+    sed -i 's/>//g' tmp.fasta
+    cp $cluster_fasta redundant_${cluster_fasta}
+    seqkit grep -f tmp.fasta $duplicates_fasta > redundancy.fasta
+
+    echo \$(grep -c '>' redundancy.fasta)
+    
+    cat redundancy.fasta >> redundant_${cluster_fasta}
   """
 }

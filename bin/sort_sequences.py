@@ -33,8 +33,6 @@ codon2aminoacid = {
     'TGC':'C', 'TGT':'C', 'TGA':'*', 'TGG':'W',
   }
 
-
-
 for header, sequence in utils.parse_fasta(sequenceFile):
   positiveStrand = sequence
   longestCDS = 0

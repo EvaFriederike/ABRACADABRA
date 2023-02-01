@@ -29,7 +29,7 @@ Contact:
 
 
 Usage:
-  hdbscan_virus.py [options] <inputSequences> <lineageDict> [<genomeOfInterest>]
+  hdbscan_virus.py [options] <inputSequences> <lineageDict> <primerDict>
 
 Options:
   -h, --help                              Show this help message and exits.
@@ -71,7 +71,9 @@ Options:
   --clusterThreshold CLUSTERTHRESHOLD     A distance threshold. Clusters below this value will be merged. [Default: 0.0]
 """
 
-
+####################################################################
+# IMPORTS 
+####################################################################
 
 from re import I
 import sys
@@ -83,6 +85,7 @@ from tkinter import N
 
 import numpy as np
 import json
+import pandas as pd
 from multiprocessing import Pool
 
 from datetime import datetime
@@ -108,7 +111,9 @@ from sklearn.preprocessing import normalize
 from sklearn.metrics import adjusted_rand_score, adjusted_mutual_info_score
 
 
-
+########################################################
+# DATA STRUCTURES
+########################################################
 class Clusterer(object):
   """
   """
@@ -117,12 +122,11 @@ class Clusterer(object):
   d_profiles = {}
   header2id = {}
   header2lineage = {}
+  #header2primer = {}
   dim = 0
   matrix = np.empty(shape=(dim,dim))
 
   genomeOfInterest = ''
-  goiHeader = []
-  goi2Cluster = {}
 
   scipyDistances = {
       'euclidean' : scipy.spatial.distance.euclidean ,
@@ -137,11 +141,12 @@ class Clusterer(object):
       'cosine' : scipy.spatial.distance.cosine
   }
 
-  def __init__(self, logger, sequenceFile, lineageDict, outdir,  k, proc, metric, neighbors,  threshold, dimension, clusterSize, minSample, goi=""):
+  def __init__(self, logger, sequenceFile, lineageDict, primerDict, outdir,  k, proc, metric, neighbors,  threshold, dimension, clusterSize, minSample):
     """
     """
 
     self.lineageDict = lineageDict
+    #self.primerDict = primerDict
     self.sequenceFile = sequenceFile
     self.outdir = outdir
 
@@ -167,22 +172,16 @@ class Clusterer(object):
     self.probabilities = []
 
 
-    if goi:
-      Clusterer.genomeOfInterest = goi
-
-  def __parse_fasta(self, filePath, goi=False):
+  def __parse_fasta(self, filePath):
     """
     """
-
     with open(filePath, 'r') as inputStream:
       header = ''
       seq = ''
-
       for line in inputStream:
         if line.startswith(">"):
           if header:
             yield (header, seq)
-
           header = line.rstrip("\n").replace(':','_').replace(' ','_').strip(">_")
           seq = ''
         else:
@@ -196,25 +195,18 @@ class Clusterer(object):
     fastaContent = {}
     for header, sequence in self.__parse_fasta(self.sequenceFile):
       idHead += 1
+      if header in Clusterer.header2id.keys():
+        logger.warn(f"{header} already stored with id {Clusterer.qheader2id[header]}")
       Clusterer.id2header[idHead] = header
       Clusterer.header2id[header] = idHead
       fastaContent[idHead] = sequence
-
-    if Clusterer.genomeOfInterest:
-      for header, sequence in self.__parse_fasta(Clusterer.genomeOfInterest):
-          if header in Clusterer.header2id:
-            idHead = Clusterer.header2id[header]
-          else:
-            idHead += 1
-          Clusterer.goiHeader.append(idHead)
-          Clusterer.id2header[idHead] = header
-          Clusterer.header2id[header] = idHead
-          fastaContent[idHead] = sequence
+    print(f"size id2header and header2id: {len(Clusterer.id2header), len(Clusterer.header2id)}")
+    print(f"unique values id2header and header2id: {len(set(list(Clusterer.id2header.values()))), len(set(list(Clusterer.header2id.values())))}")
 
     Clusterer.dim = len(fastaContent)
     Clusterer.matrix = np.zeros(shape=(Clusterer.dim, Clusterer.dim), dtype=float)
-
-    if len(fastaContent) < 21:
+    # for hdbscan, the data set size has to be larger or equal to min_samples
+    if len(fastaContent) < 5:
       return 1
     return fastaContent
 
@@ -234,7 +226,7 @@ class Clusterer(object):
       profile = list(map(lambda x: x/kmerSum, profile))
       return (header, profile)
     except ZeroDivisionError:
-      print(Clusterer.id2header[header] + " skipped, due to too many N's.")
+      logger.warn(Clusterer.id2header[header] + " skipped, due to too many N's.")
       return(None, None)
 
 
@@ -242,6 +234,7 @@ class Clusterer(object):
 
     self.d_sequences = self.read_sequences()
     if self.d_sequences == 1:
+      logger.warn("{self.d_sequences} are too few for clustering")
       import shutil
       shutil.copyfile(self.sequenceFile, f'{self.outdir}/{os.path.splitext(os.path.basename(self.sequenceFile))[0]}_hdbscan.fasta')
       return 1
@@ -252,16 +245,24 @@ class Clusterer(object):
     p.join()
     for header, profile in allProfiles:
       #if header:
-        Clusterer.d_profiles[header] = profile
+      Clusterer.d_profiles[header] = profile
 
   def get_lineage_annotations(self):
-    with open(self.lineageDict) as json_file:
-      data = json.load(json_file)
+    df = pd.read_csv(self.lineageDict, sep=',')
+    data = {r.header: r.lineage for i,r in df.iterrows()}
+    # with open(self.primerDict) as json_file:
+    #   primer_data = json.load(json_file)
+    #print(f"size id2header and header2id: {len(Clusterer.id2header), len(Clusterer.header2id)}")
     for index, profile in Clusterer.d_profiles.items():
       header = Clusterer.id2header[index]
-      Clusterer.header2lineage[header] = data[header]
-    print("Number of profiles and number of lineage assignments:")
-    print(len(Clusterer.d_profiles), len(Clusterer.header2lineage))
+      if 'sub' in header:
+        Clusterer.header2lineage[header] = data['_'.join(header.split('_')[:-1])]
+      else:  
+        Clusterer.header2lineage[header] = data[header]
+      # Clusterer.header2primer[header] = primer_data[header]
+    # print("Number of profiles, number of lineage assignments and primer locations:")
+    # print(len(Clusterer.d_profiles), len(Clusterer.header2lineage), len(Clusterer.header2primer))
+    print(f"Number of profiles, number of lineage assignments: {len(Clusterer.d_profiles)}, {len(Clusterer.header2lineage)}")
 
 
   def calc_pd(self, seqs):
@@ -284,47 +285,51 @@ class Clusterer(object):
     """
     profiles = [(idx,profile) for idx, profile in Clusterer.d_profiles.items() if idx in self.d_sequences]
     vector = [x[1] for x in profiles]
-
-    try:
-      clusterable_embedding = umap.UMAP(
+    clusterable_embedding = umap.UMAP(
                 n_neighbors=2*self.neighbors,
                 min_dist=self.threshold,
                 n_components=self.dimension,
                 random_state=42,
                 metric=self.metric
             ).fit_transform(vector)
-      visual_embedding = umap.UMAP(
+    visual_embedding = umap.UMAP(
                 n_neighbors=self.neighbors,
                 min_dist=self.threshold,
                 n_components=self.dimension,
                 random_state=42,
                 metric=self.metric
             ).fit(vector)
-      print("Size of UMAP clusterable data, visual data, and number of lineage labels:")
-      print(len(clusterable_embedding), len(visual_embedding.embedding_), len(Clusterer.header2lineage.values()))
-      # Plot UMAPped reads with lineage assignment
-      fig, ax = plt.subplots()
-      ax = umap.plot.points(visual_embedding, labels=np.array(list(Clusterer.header2lineage.values())))
-      ax.set_title('UMAP embedding of input reads (colored by lineage assignment)')
-      plt.savefig('umap_lineageplot.png')
-      plt.close()
+    print(f"Size of UMAP clusterable data, visual data, and number of lineage labels:, {len(clusterable_embedding)}, {len(visual_embedding.embedding_)}, {len(Clusterer.header2lineage.values())}")
+    # Plot UMAPped reads with lineage assignment
+    fig, ax = plt.subplots()
+    ax = umap.plot.points(visual_embedding, labels=np.array(list(Clusterer.header2lineage.values())))
+    ax.set_title('UMAP embedding of input reads (colored by lineage assignment)')
+    plt.savefig('umap_lineageplot.png')
+    plt.close()
 
-      clusterer = hdbscan.HDBSCAN(min_cluster_size=self.clusterSize, min_samples=self.minSample, cluster_selection_epsilon=self.clusterThreshold)
-      if self.metric == "cosine":
-        clusterable_embedding = normalize(clusterable_embedding,norm='l2')
-        clusterer.fit(clusterable_embedding)
-      else:
-        clusterer.fit(clusterable_embedding,metric=self.metric)
+    # Plot UMAPped reads with primer location
+    # fig, ax = plt.subplots()
+    # ax = umap.plot.points(visual_embedding, labels=np.array(list(Clusterer.header2primer.values())))
+    # ax.set_title('UMAP embedding of input reads (colored by primer location)')
+    # plt.savefig('umap_primerplot.png')
+    # plt.close()
 
-      self.clusterlabel = clusterer.labels_
-      self.probabilities = clusterer.probabilities_
-      if len(set(self.clusterlabel)) == 1:
-        raise TypeError
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=self.clusterSize, min_samples=self.minSample, cluster_selection_epsilon=self.clusterThreshold)
+    if self.metric == "cosine":
+      clusterable_embedding = normalize(clusterable_embedding,norm='l2')
+      clusterer.fit(clusterable_embedding)
+    else:
+      clusterer.fit(clusterable_embedding,metric=self.metric)
 
-    except TypeError:
-      import shutil
-      shutil.copyfile(self.sequenceFile, f'{self.outdir}/{os.path.splitext(os.path.basename(self.sequenceFile))[0]}_hdbscan.fasta')
-      return 1
+    self.clusterlabel = clusterer.labels_
+    self.probabilities = clusterer.probabilities_
+    #   if len(set(self.clusterlabel)) == 1:
+    #     raise TypeError
+
+    # except TypeError:
+    #   import shutil
+    #   shutil.copyfile(self.sequenceFile, f'{self.outdir}/{os.path.splitext(os.path.basename(self.sequenceFile))[0]}_hdbscan.fasta')
+    #   return 1
 
     adj_rs = adjusted_rand_score(list(Clusterer.header2lineage.values()), self.clusterlabel)
     self.allCluster = list(zip([x[0] for x in profiles], self.clusterlabel))
@@ -338,24 +343,17 @@ class Clusterer(object):
           for idx, label in self.allCluster:
             if label == i:
               cluster_profiles.extend([t[1] for t in profiles if t[0]==idx])
-              print('cluster_profiles[0]', cluster_profiles[0])
-              if idx in Clusterer.goiHeader:
-                Clusterer.goi2Cluster[Clusterer.id2header[idx]] = i
               outStream.write(f"{Clusterer.id2header[idx]}\n")
               fastaOut.write(f">{Clusterer.id2header[idx]}\n{self.d_sequences[idx].split('X'*10)[0]}\n")
         outStream.write("\n")
-        # bootstrap?
-        print('cluster_profiles shape', np.array(cluster_profiles).shape)
-        cluster_profile_mean = np.sort(np.mean(np.array(cluster_profiles),axis=0))
-        print('cluster_profiles_mean shape', cluster_profile_mean.shape)
+        print(f"Cluster {i}:\t{np.array(cluster_profiles).shape[0]} reads")
+        cluster_profile_mean = np.mean(np.array(cluster_profiles), axis=0)
         fig, ax = plt.subplots(figsize=(12,5))
-        ax.plot(np.arange(1,len(self.allKmers)+1), cluster_profile_mean)
-        plt.title(f'Sorted Kmer Histogram Cluster {i}')
-        plt.savefig(f'sorted-histogram_cluster_{i}.png')
+        ax.hist(cluster_profile_mean)
+        plt.title(f'Mean Kmer Histogram Cluster {i}', fontsize=13)
+        plt.savefig(f'mean-histogram_cluster_{i}.png')
         plt.close()
 
-    print("Size of UMAP data and number of lineage labels:")
-    print(len(visual_embedding.embedding_), len(Clusterer.header2lineage.values()))
     # Plot clustering result in UMAP space
     fig, ax =plt.subplots()
     ax.scatter(clusterable_embedding[:,0], clusterable_embedding[:,1], c=self.clusterlabel, label=self.clusterlabel, cmap='Paired')
@@ -380,14 +378,10 @@ class Clusterer(object):
 
     for cluster, sequences in seqCluster.items():
       if cluster == -1:
-        #for sequence in sequences:
-          #if sequence in Clusterer.goiHeader:
-          #  self.centroids.append(sequence)
-        continue #print(sequence)
+        continue 
 
       subProfiles = {seq : profile for seq, profile in Clusterer.d_profiles.items() if seq in sequences}
 
-      #if not self.subCluster:
       for result in p.map(self.calc_pd, itertools.combinations(subProfiles.items(), 2)):
         seq1, seq2, dist = result
         Clusterer.matrix[seq1][seq2] = dist
@@ -403,11 +397,6 @@ class Clusterer(object):
 
       for sequence in sequences:
         averagedDistance = 0
-
-        if sequence in Clusterer.goiHeader:
-          #print(Clusterer.goiHeader)
-          #self.centroids.append(sequence)
-          continue
 
         for neighborSequence in sequences:
           if sequence == neighborSequence:
@@ -428,7 +417,6 @@ class Clusterer(object):
     """
     """
     reprSeqs = {centroid : self.d_sequences[centroid] for centroid in self.centroids}
-    reprSeqs.update({goiID : self.d_sequences[goiID] for goiID in Clusterer.goiHeader})
     outputPath = f'{self.outdir}/{os.path.splitext(os.path.basename(self.sequenceFile))[0]}_hdbscan.fasta'
 
     with open(outputPath, 'w') as outStream:
@@ -443,15 +431,58 @@ class Clusterer(object):
           outStream.write(f"{idx}\t{len(self.d_sequences[seqIdx])}nt, >{Clusterer.id2header[seqIdx]} ")
           if seqIdx in self.centroids:
             outStream.write('*\n')
-          elif seqIdx in Clusterer.goiHeader:
-            outStream.write("GOI\n")
           else:
             outStream.write("at +/13.37%\n")
 
-###################################################################################################
+
+
+
+
+########################################################
+# CLUSTER PIPELINE
+########################################################
+def __abort_cluster(clusterObject, filename):
+    logger.warn(f"Too few sequences for clustering in {os.path.basename(filename)}. No subcluster will be created.")
+    del clusterObject
+
+def perform_clustering():
+
+  multiPool = Pool(processes=proc)
+  virusClusterer = Clusterer(logger, inputSequences, lineageDict, primerDict, outdir,  k, proc, metric, neighbors, threshold, dimension, clusterSize, minSample)
+
+  logger.info("Determining k-mer profiles for all sequences.")
+  virusClusterer.determine_profile(multiPool)
+  logger.info("Read lineage annotations for all sequences")
+  virusClusterer.get_lineage_annotations()
+  logger.info("Clustering with UMAP and HDBSCAN.")
+  code = virusClusterer.apply_umap()
+  #if code == 1:
+  #  __abort_cluster(virusClusterer, inputSequences)
+  #  return 0
+  clusterInfo = virusClusterer.clusterlabel
+  logger.info(f"Summarized {virusClusterer.dim} sequences into {clusterInfo.max()+1} clusters. Filtered {np.count_nonzero(clusterInfo == -1)} sequences due to uncertainty.")
+
+  # logger.info("Extracting centroid sequences and writing results to file.\n")
+  # logger.info("..get_centroids..\n")
+  # virusClusterer.get_centroids(multiPool)
+  # logger.info("..output_centroids..\n")
+  # virusClusterer.output_centroids()
+
+  logger.info(f"Extracting representative sequences for each cluster.")
+  sequences = virusClusterer.d_sequences
+  distanceMatrix = virusClusterer.matrix
+  profiles = virusClusterer.d_profiles
+  del virusClusterer
+
+  return 0
+
+
+
+#########################################################
+# READ INPUT + LOGGER FUNCTIONALITIES
+########################################################
 
 inputSequences = None
-goi = None
 outdir = None
 k = None
 proc = None
@@ -521,11 +552,12 @@ def parse_arguments(d_args):
       logger.error("Couldn't find lineage dictionary. Check your file")
       exit(1)
 
-  goi = d_args['<genomeOfInterest>']
-  if goi and not os.path.isfile(goi):
-    logger.error("Couldn't find genome of interest. Check your file")
-    exit(1)
-  
+  primerDict = d_args['<primerDict>']
+  print('primerDict', primerDict)
+  if not os.path.isfile(primerDict):
+      logger.error("Couldn't find primer dictionary. Check your file")
+      exit(1)
+
   try:
     k = int(d_args['--kmer'])
     print('k', k)
@@ -545,7 +577,6 @@ def parse_arguments(d_args):
   if output == 'pwd':
     output = os.getcwd()
   now = str(datetime.now()).split('.')[0].replace(' ','_').replace(':','-')
-  #output = f"{output}/viralClust-{now}"
   create_outdir(output)
 
   METRICES = [
@@ -620,54 +651,16 @@ def parse_arguments(d_args):
       exit(2)
 
 
-  return (inputSequences, lineageDict,  goi, output,  k, proc, metric, neighbors, threshold, dimension, clusterSize, minSample, clusterThreshold)
-
-def __abort_cluster(clusterObject, filename):
-    logger.warn(f"Too few sequences for clustering in {os.path.basename(filename)}. No subcluster will be created.")
-    del clusterObject
-
-def perform_clustering():
-
-  multiPool = Pool(processes=proc)
-  virusClusterer = Clusterer(logger, inputSequences, lineageDict, outdir,  k, proc, metric, neighbors, threshold, dimension, clusterSize, minSample, goi=goi)
-
-  logger.info("Determining k-mer profiles for all sequences.")
-  virusClusterer.determine_profile(multiPool)
-  logger.info("Read lineage annotations for all sequences")
-  virusClusterer.get_lineage_annotations()
-  if goi:
-    logger.info(f"Found {len(virusClusterer.goiHeader)} genome(s) of interest.")
-  logger.info("Clustering with UMAP and HDBSCAN.")
-  code = virusClusterer.apply_umap()
-  #if code == 1:
-  #  __abort_cluster(virusClusterer, inputSequences)
-  #  return 0
-  clusterInfo = virusClusterer.clusterlabel
-  logger.info(f"Summarized {virusClusterer.dim} sequences into {clusterInfo.max()+1} clusters. Filtered {np.count_nonzero(clusterInfo == -1)} sequences due to uncertainty.")
-
-  goiCluster = virusClusterer.goi2Cluster
-  if goiCluster:
-    for header, cluster in goiCluster.items():
-      logger.info(f"You find the genome {header} in cluster {cluster}.")
-
-  logger.info("Extracting centroid sequences and writing results to file.\n")
-  logger.info("..get_centroids..\n")
-  virusClusterer.get_centroids(multiPool)
-  logger.info("..output_centroids..\n")
-  virusClusterer.output_centroids()
-
-  logger.info(f"Extracting representative sequences for each cluster.")
-  sequences = virusClusterer.d_sequences
-  distanceMatrix = virusClusterer.matrix
-  profiles = virusClusterer.d_profiles
-  del virusClusterer
-
-  return 0
+  return (inputSequences, lineageDict,  primerDict, output,  k, proc, metric, neighbors, threshold, dimension, clusterSize, minSample, clusterThreshold)
 
 
+
+###########################################################################
+# MAIN
+###########################################################################
 if __name__ == "__main__":
   logger = create_logger()
-  (inputSequences, lineageDict, goi, outdir, k, proc, metric, neighbors, threshold, dimension, clusterSize, minSample, clusterThreshold) = parse_arguments(docopt(__doc__))
+  (inputSequences, lineageDict, primerDict, outdir, k, proc, metric, neighbors, threshold, dimension, clusterSize, minSample, clusterThreshold) = parse_arguments(docopt(__doc__))
 
   logger.info("Starting to cluster you data. Stay tuned.")
   perform_clustering()

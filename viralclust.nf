@@ -1,10 +1,9 @@
 #!/usr/bin/env nextflow
 
 /*
-* Source: 
-*
-* Clustering of viral genomes based on different algorithms and metrices
-* Author: kevin.lamkiewicz@uni-jena.de
+* Source: https://github.com/klamkiew/viralclust/commit/3203e6de334c6834877dbdffecff70df07ed80d7
+* "Clustering of viral genomes based on different algorithms and metrices"
+* (Author: kevin.lamkiewicz@uni-jena.de)
 */
 
 nextflow.enable.dsl=2
@@ -29,8 +28,6 @@ println "Launchdir location:"
 println "  $workflow.launchDir"
 println "Configuration files:"
 println "  $workflow.configFiles"
-println "Path for database:"
-println " $params.permanentCacheDir\u001B[0m"
 println " "
 
 if (workflow.profile == 'standard' || workflow.profile.contains('local')) {
@@ -42,118 +39,240 @@ if ( params.profile ) {
   exit 1, "ERROR: --profile is WRONG use -profile"
 }
 
-if ( params.fasta == '') {
-  exit 1, "ERROR: --fasta is a required parameter.\nMake sure it is set."
-}
-
-sortSequence = Channel.fromPath( workflow.projectDir + '/bin/sort_sequences.py', checkIfExists: true )
-rc_script = Channel.fromPath( workflow.projectDir + '/bin/reverse_complement.py', checkIfExists: true )
-utils = Channel.fromPath( workflow.projectDir + '/bin/utils.py', checkIfExists: true )
-umap_hdbscan_script = Channel.fromPath( workflow.projectDir + '/bin/hdbscan_virus.py', checkIfExists: true )
-
 
 log.info """\
     VIRALCLUST -- CLUSTER YOUR VIRUSES
     ==================================
-    Input File:             $params.fasta
+    Input Files:            $params.input
     Output path:            $params.output
     CPUs used:              $params.cores
     ${sw -> if (params.hdbscan_params != '') sw << "HDBSCAN parameters:     ${params.hdbscan_params}"}
     """
     .stripIndent()
 
-if (params.fasta) {
-  sequences = Channel.fromPath(params.fasta)
-  reference_channel = Channel.fromPath(params.reference)
-  if (params.lineageDict) {
-    lineageDict = Channel.fromPath(params.lineageDict)
-  }
 
-  if (params.goi) {
-    goi = Channel.fromPath(params.goi)
-    include { sort_sequences as goi_sorter } from './modules/sortsequences'
-    include { concat_goi } from './modules/remove_redundancy'
-  }
-
-  include { sort_sequences } from './modules/sortsequences'
-  include { remove_redundancy } from './modules/remove_redundancy'
-  include { hdbscan } from './modules/hdbscan'
-  include { reverseComp } from './modules/reverseComp'
-  include { evaluate_cluster; merge_evaluation } from './modules/evaluate'
-  include { call_variants; mutation_heatmap } from './modules/cluster_profiles'
+if (!params.prepare_mixture) {
+  lineageDict = Channel.fromPath("$params.input/lineageDict.csv")
+  fasta = Channel.fromPath("$params.input/query.fasta")
 }
 
+if (!params.sort_reads) { 
+    amplicon_ch = Channel.fromPath("$params.output/$params.amplicon_data/final/*.fasta")
+    amplicon_redundancy_ch = Channel.fromPath("$params.output/$params.amplicon_data/redundant/*.fasta")
+}
+else {
+  bed = Channel.fromPath(params.bed)
+  primer = Channel.fromPath(params.primer)
+}
 
-workflow preprocessing {
+reference = Channel.fromPath(params.reference)
+usher = Channel.fromPath(params.usher)
+
+
+include { fastq_to_fasta } from './modules/fastq_to_fasta'
+include { sort_sequences; primer_sort; read_filtering } from './modules/sortsequences'
+include { primer_clipping } from './modules/primer_clipping'
+include { remove_redundancy; add_redundancy } from './modules/remove_redundancy'
+include { create_lineage_dict } from './modules/create_dict'
+include { primerset_to_amplicon } from './modules/primerset_to_amplicon'
+include { hdbscan } from './modules/hdbscan'
+// include { reverseComp } from './modules/reverseComp'
+include { call_variants } from './modules/cluster_profiles'
+include { update_reference; lineage_prediction; amplicon_quant; aggregate_abundances } from './modules/lineage_prediction'
+include { lineage_prediction as lineage_prediction_repeat; amplicon_quant as amplicon_quant_repeat; aggregate_abundances as aggregate_abundances_repeat } from './modules/lineage_prediction'
+
+
+workflow prepare_mixture {
+
   main:
-    sort_sequences(sequences)
-    if (params.goi) {
-      goi_sorter(goi)
-      goiSorted = goi_sorter.out.sort_result
-    } else {
-      goiSorted = 'NO FILE'
-    }
-    if (params.remove_redundancy){
-      remove_redundancy(sort_sequences.out.sort_result)
-      non_redundant_ch = remove_redundancy.out.nr_result
-    }
-    else {
-      non_redundant_ch = sort_sequences.out.sort_result
-    }  
-    if (params.goi) {
-        concat_goi(remove_redundancy.out.nr_result, goiSorted)
-        non_redundant_ch = concat_goi.out.nr_result
-    }
+    mixed_components = Channel.fromPath("$params.mixture_fastqs/*.fastq")
+    mixed_lineages = Channel.fromPath(params.mixture_lineages).splitCsv(header:false,skip:1)
+
+    fastq_to_fasta(mixed_components)
+    mixed_components_fa = fastq_to_fasta.out.map{ it -> tuple(it.baseName, it) } // [barcode, fasta]
+    create_lineage_dict(mixed_components_fa.join(mixed_lineages))
+    lineageDict = create_lineage_dict.out.collectFile(keepHeader: true, name: "lineageDict.csv", storeDir:"$params.input")
+    fasta = fastq_to_fasta.out.collectFile(name:"query.fasta", storeDir:"$params.input")
+
   emit:
-    non_redundant_ch
-    goiSorted
+    lineageDict
+    fasta
 }
 
-workflow hdbscan_wf{
+
+workflow get_amplicon_reads {
   take:
     fasta
-    lineageDict
-    hdbscan_params
-    goiSorted
-    reference_channel
-
+  
   main:
-    hdbscan(fasta, lineageDict, hdbscan_params, goiSorted)
-    hdbscan_results = hdbscan.out.hdbscan_out
-    hdbscan_fasta = hdbscan.out.cluster_fasta_files.flatten()
-    call_variants(hdbscan_fasta.combine(reference_channel))
-    mutation_heatmap(call_variants.out.bam_path.unique())
+    primer_sort(fasta.combine(primer))
+    primer_reads = primer_sort.out.primer_reads.flatten().map{ it -> tuple(it.name, it) } // [ primername, fasta ]
+    read_filtering(primer_reads)
+    filtered_primer_reads = read_filtering.out.filtered.filter{ it[1].countFasta() != 0 } 
+
+    primer_clipping(filtered_primer_reads.combine(bed).combine(reference))
+    primer_clipped_ch = primer_clipping.out.primerclipped_fasta
+    right_primerclipped = primer_clipped_ch.filter{ it[0] ==~ /.*RIGHT.fasta/ }
+    left_primerclipped = primer_clipped_ch.filter{ it[0] ==~ /.*LEFT.fasta/ }
+    
+    sort_sequences(right_primerclipped)
+    right_primerclipped_sorted = sort_sequences.out
+    primerclipped_redundant = left_primerclipped.concat(right_primerclipped_sorted)
+
+    remove_redundancy(primerclipped_redundant) 
+    // [primername, fasta]
+    nr_primersets = remove_redundancy.out.nr_fasta.map{ it -> tuple(it[0].split('_')[1], it[1]) }.groupTuple().map{ it.flatten() } // [amplicon, left.fasta, right.fasta]
+    amplicon_redundancy = remove_redundancy.out.redundancy.collectFile(storeDir: "$params.output/$params.amplicon_data/redundant"){ it -> ["${it.name}", it] }.map{ it -> tuple(it.baseName.split('-')[0], it) }
+    redundancy_log = remove_redundancy.out.log.collectFile(storeDir: "$params.output/${params.runinfo}", name: "remove_redundancy.log")
+
+    nr_primersets_handle_borders = nr_primersets.map{it -> if (it.size()==2) [it[0], it[1], file(params.dummy)] else it}
+    primerset_to_amplicon(nr_primersets_handle_borders)
+    amplicon_ch = primerset_to_amplicon.out    
+            
 
   emit:
-    hdbscan_results
+    amplicon_ch
+    amplicon_redundancy
 }
 
 workflow clustering {
-
   take:
-    non_redundant_ch
-    goiSorted
+    amplicon_fasta
+    lineageDict
+    amplicon_redundancy
+    amplicon_size
+    //primerDict
 
   main:
-    hdbscan_wf(non_redundant_ch, lineageDict, params.hdbscan_params, goiSorted, reference_channel)
-    
-    results_channel = Channel.value('HDBSCAN').combine(hdbscan_wf.out.hdbscan_results)
-
-    reverseComp(results_channel)
+    hdbscan(amplicon_fasta.combine(lineageDict)) // previously had primerDict as additional input
+    cluster_result = hdbscan.out.amplicon_cluster
+    cluster_log = hdbscan.out.log.collectFile(name: 'hdbscan.log', storeDir: "${params.output}/${params.runinfo}")
+  
+    // [amplicon, ampliconsize, [cluster0.fasta,...clusterN.fasta], amplicon-duplicates.fasta]
+    cluster_result_extended = amplicon_size.join(cluster_result).join(amplicon_redundancy)
+    add_redundancy(cluster_result_extended.transpose())
+    redundant_cluster_result = add_redundancy.out
+    //results_channel = Channel.value('HDBSCAN').combine(hdbscan.out.hdbscan_out)
+    // why is this still needed?
+    //reverseComp(results_channel)
 
   emit:
-    results_channel
+    //results_channel
+    redundant_cluster_result
+}
+
+// workflow evaluation {
+//   take:
+//     cluster_fasta_files
+//     primerDict
+
+//   main:
+//     split_fasta_by_primer(cluster_fasta_files.combine(primerDict))
+//     split_fasta_by_primer.out.view()
+//     split_fasta_by_primer.out.combine(reference).view()
+//     call_variants(split_fasta_by_primer.out.combine(reference))
+//     call_variants.out.bam_path.groupTuple().view()
+//     call_variants.out.bam_path.groupTuple().map{ it -> it[1] }.first().flatten().unique().view()
+//     mutation_heatmap(call_variants.out.bam_path.groupTuple().map{ it -> it[1] }.first().flatten().unique())
+// }
+
+workflow prediction{
+  take:
+    cluster_fasta // [amplicon, ampliconsize, cluster, cluster.fasta]
+    amplicon_scaler // [amplicon, ampliconsize/samplesize]
+
+  main:
+    // First, split cluster by primer?
+    call_variants(cluster_fasta.combine(reference))
+    // [amplicon, ampliconsize, cluster, cluster.tsv]
+    allele_frequency_ch = call_variants.out.cluster_AF.filter{ it[3].baseName.contains("medaka") }
+    variant_call_log = call_variants.out.log.collectFile(storeDir: "$params.output/${params.runinfo}", name: "variant_call.log")
+
+    amplicon_cluster_ch = cluster_fasta.join(allele_frequency_ch, by:[0,1,2]).map{ it -> tuple(it[0], it[2], it[3].countFasta()/it[1], it[4]) }
+    prediction_input = amplicon_cluster_ch // [amplicon, cluster, clustersize/ampliconsize, cluster.tsv]
+
+    lineage_prediction(prediction_input.combine(usher))
+    prediction_log = lineage_prediction.out.log.collectFile(name:'quantify_cluster_abundances.log', storeDir:"$params.output/${params.runinfo}")
+    amplicon_cluster_abundances = lineage_prediction.out.abs // [amplicon, cluster, tsv]
+    amplicon_ready = amplicon_cluster_abundances.map{ it -> tuple(it[0], it[2]) }.groupTuple().map{ it ->  it[0]} // [amplicon] 
+
+    amplicon_quant(amplicon_ready.join(amplicon_scaler)) // input [amplicon, ampliconsize/samplesize]
+    amplicon_abundances = amplicon_quant.out.abs // [amplicon, tsv]
+    amplicon_quant_log = amplicon_quant.out.log.collectFile(name:'quantify_amplicon_abundances.log', storeDir:"$params.output/${params.runinfo}")
+
+    sample_abundances = amplicon_abundances.map{ it -> it[1] }.collectFile(keepHeader: true, skip: 1, name:"scaled_amplicon_abundances.tsv") // [tsv]
+
+    aggregate_abundances(sample_abundances, Channel.value(params.threshold))
+    fp_ch = aggregate_abundances.out.FP
+    if (fp_ch.count() == 0) {
+      final_output = aggregate_abundances.out.abs // [tsv]
+      final_log = aggregate_abundances.out.log.collectFile(name:'sample_abundances.log', storeDir:"${params.output}/${params.runinfo}")
+    }
+    else{
+      update_reference(usher.combine(fp_ch))
+      updated_reference = update_reference.out.dataframe
+      lineage_prediction_repeat(prediction_input.combine(updated_reference))
+      prediction_log_repeat = lineage_prediction_repeat.out.log.collectFile(name:'quantify_cluster_abundances.log', storeDir:"$params.output/${params.runinfo}")
+      amplicon_cluster_abundances_repeat = lineage_prediction_repeat.out.abs // [amplicon, cluster, tsv]
+      amplicon_ready_repeat = amplicon_cluster_abundances_repeat.map{ it -> tuple(it[0], it[2]) }.groupTuple().map{ it ->  it[0]} // [amplicon] 
+
+      amplicon_quant_repeat(amplicon_ready_repeat.join(amplicon_scaler)) // input [amplicon, ampliconsize/samplesize]
+      amplicon_abundances_repeat = amplicon_quant_repeat.out.abs // [amplicon, tsv]
+      amplicon_quant_log_repeat = amplicon_quant_repeat.out.log.collectFile(name:'quantify_amplicon_abundances.log', storeDir:"$params.output/${params.runinfo}")
+
+      sample_abundances_repeat = amplicon_abundances_repeat.map{ it -> it[1] }.collectFile(keepHeader: true, skip: 1, name:"scaled_amplicon_abundances.tsv") // [tsv]
+
+      aggregate_abundances_repeat(sample_abundances_repeat, Channel.value(0))
+      final_output = aggregate_abundances_repeat.out.abs // [tsv]
+      final_log_repeat = aggregate_abundances_repeat.out.log.collectFile(name:'sample_abundances.log', storeDir:"$params.output/${params.runinfo}")
+    }
+
+  emit:
+    final_output
+
 }
 
 workflow {
 
-  if (params.fasta) {
-    preprocessing()
-    clustering(preprocessing.out.non_redundant_ch, preprocessing.out.goiSorted)
-  }  
-  
-}
+  if (params.prepare_mixture) {
+    prepare_mixture()
+    lineageDict = prepare_mixture.out.lineageDict
+    fasta = prepare_mixture.out.fasta
+  }
+  lineageDict.view()
+  fasta.view()
 
+  if (params.sort_reads) {
+    get_amplicon_reads(fasta)
+    amplicon_fasta = get_amplicon_reads.out.amplicon_ch 
+    amplicon_redundancy = get_amplicon_reads.out.amplicon_redundancy
+  }
+  else {
+    // [amplicon, amplicon.fasta]
+    amplicon_fasta = amplicon_ch.map{ it -> tuple(it.baseName, it) }
+    // [amplicon, amplicon-duplicates.fasta]
+    amplicon_redundancy = amplicon_redundancy_ch.map{ it -> tuple(it.baseName.split('-')[0], it) }
+  }
+  amplicon_fasta.view()
+  amplicon_size = amplicon_fasta.join(amplicon_redundancy).map{ it -> tuple(it[0], it[1].countFasta()+it[2].countFasta())} // [amplicon, size]
+  amplicon_size.view()
+  sample_size = amplicon_size.map{ it -> it[1] }.sum() // [size]
+  sample_size.view()
+  // [amplicon, ampliconsize/samplesize]
+  amplicon_scaler = amplicon_size.combine(sample_size).map{ it -> tuple(it[0], it[1]/it[2]) } 
+
+  clustering(amplicon_fasta, lineageDict, amplicon_redundancy, amplicon_size) // previously: primerdict included
+  cluster_fasta = clustering.out.redundant_cluster_result // [amplicon, ampliconsize, clusterX, clusterX.fasta]
+  //evaluation(clustering.out.cluster_result, get_amplicon_reads.out.primerDict)
+      
+  prediction(cluster_fasta, amplicon_scaler)
+  abundances = prediction.out.final_output
+  abundances.view()
+
+}  
+  
+
+//  TODO
 def helpMSG() {
     c_reset = "\033[0m";
     c_red = "\033[1;31m"
@@ -173,8 +292,8 @@ def helpMSG() {
     ____________________________________________________________________________________________
 
     ${c_yellow}Mandatory Input:${c_reset}
-    ${c_green}--fasta PATH${c_reset}                      Path to a multiple fasta sequence file, storing all genomes that shall be clustered.
-                                      Usually, this parameter has to be set, unless the parameter ${c_green}--ncbi_update${c_reset} has been set.
+    ${c_green}--fastq PATH${c_reset}                      Path to the input fastq file, storing the sequencing reads.
+    ${c_green}--lineageDict PATH${c_reset}                Path to a json file mapping the read ids ids to their pangolin annotation
     ____________________________________________________________________________________________
 
     ${c_yellow}Options:${c_reset}
@@ -203,7 +322,7 @@ def helpMSG() {
     """.stripIndent()
 }
 
-def hdbscanHelp() {
+def ClusterHelp() {
   c_reset = "\033[0m";
   c_red = "\033[1;31m"
   c_green = "\033[1;32m";
@@ -214,8 +333,8 @@ def hdbscanHelp() {
   ____________________________________________________________________________________________
   This python program is part of ViralClust and takes several genome sequences
   from different viruses as an input.
-  These will be clustered these sequences into groups (clades) based
-  on their sequence similarity. For each clade, the centroid sequence is
+  These will be UMAPped based on their kmer frequency representation and then clustered 
+  into groups (clades) based on their sequence similarity. For each clade, the centroid sequence is
   determined as representative genome, i.e. the sequence with the lowest
   distance to all other sequences of this clade.
   ____________________________________________________________________________________________
@@ -232,7 +351,7 @@ def hdbscanHelp() {
     kevin.lamkiewicz@uni-jena.de
 
   Usage:
-    hdbscan_virus.py [options] <inputSequences> <lineageDict> [<genomeOfInterest>]
+    hdbscan_virus.py [options] <inputSequences> <lineageDict> <primerDict>
 
   Options:
     -h, --help                              Show this help message and exits.
