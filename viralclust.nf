@@ -39,32 +39,37 @@ if ( params.profile ) {
   exit 1, "ERROR: --profile is WRONG use -profile"
 }
 
+if (params.mode != 'simulation' && params.mode != 'real') {
+    exit 1, "ERROR: choose between simulation or real data mode!"
+}
+if (params.mode == 'simulation' && params.sort_reads && params.mixture_fastqs=='') {
+    exit 1, "ERROR: Please input a folder of mix-in fastq samples!"
+}
+if (params.mode == 'simulation' && params.sort_reads && params.mixture_lineages=='') {
+    exit 1, "ERROR: Please input a csv file with lineage annotation for the input mix-in samples!"
+}
+if (params.mode == 'real' && params.fastq=='') {
+    exit 1, "ERROR: Please input fastq file!"
+}
 
 log.info """\
-    VIRALCLUST -- CLUSTER YOUR VIRUSES
+    ACWLA -- Amplicon-based Clustering of Wastewater Sequencing Data for SARS-CoV-2 Lineage Detection and Abundance Estimation
     ==================================
-    Input Files:            $params.input
+    Analysis mode:          $params.mode
+    Input Files:            
     Output path:            $params.output
     CPUs used:              $params.cores
     ${sw -> if (params.hdbscan_params != '') sw << "HDBSCAN parameters:     ${params.hdbscan_params}"}
+    Read length filter:     $params.min_read_len nt
+    False positive abundance cutoff:  $params.threshold
     """
     .stripIndent()
 
 
-if (!params.prepare_mixture) {
-  lineageDict = Channel.fromPath("$params.input/lineageDict.csv")
-  fasta = Channel.fromPath("$params.input/query.fasta")
-}
-
-if (!params.sort_reads) { 
-    amplicon_ch = Channel.fromPath("$params.output/$params.amplicon_data/final/*.fasta")
-    amplicon_redundancy_ch = Channel.fromPath("$params.output/$params.amplicon_data/redundant/*.fasta")
-}
-else {
+if (params.sort_reads) { 
   bed = Channel.fromPath(params.bed)
   primer = Channel.fromPath(params.primer)
 }
-
 reference = Channel.fromPath(params.reference)
 usher = Channel.fromPath(params.usher)
 
@@ -91,8 +96,8 @@ workflow prepare_mixture {
     fastq_to_fasta(mixed_components)
     mixed_components_fa = fastq_to_fasta.out.map{ it -> tuple(it.baseName, it) } // [barcode, fasta]
     create_lineage_dict(mixed_components_fa.join(mixed_lineages))
-    lineageDict = create_lineage_dict.out.collectFile(keepHeader: true, name: "lineageDict.csv", storeDir:"$params.input")
-    fasta = fastq_to_fasta.out.collectFile(name:"query.fasta", storeDir:"$params.input")
+    lineageDict = create_lineage_dict.out.collectFile(keepHeader: true, name: "lineageDict.csv", storeDir:"$params.output/$params.mode/input")
+    fasta = fastq_to_fasta.out.collectFile(name:"query.fasta", storeDir:"$params.output/$params.mode/input")
 
   emit:
     lineageDict
@@ -108,6 +113,7 @@ workflow get_amplicon_reads {
     primer_sort(fasta.combine(primer))
     primer_reads = primer_sort.out.primer_reads.flatten().map{ it -> tuple(it.name, it) } // [ primername, fasta ]
     read_filtering(primer_reads)
+    read_filtering.out.log.collectFile(storeDir: "$params.output/$params.mode/${params.runinfo}", name: "read_filtering.log")
     filtered_primer_reads = read_filtering.out.filtered.filter{ it[1].countFasta() != 0 } 
 
     primer_clipping(filtered_primer_reads.combine(bed).combine(reference))
@@ -122,8 +128,8 @@ workflow get_amplicon_reads {
     remove_redundancy(primerclipped_redundant) 
     // [primername, fasta]
     nr_primersets = remove_redundancy.out.nr_fasta.map{ it -> tuple(it[0].split('_')[1], it[1]) }.groupTuple().map{ it.flatten() } // [amplicon, left.fasta, right.fasta]
-    amplicon_redundancy = remove_redundancy.out.redundancy.collectFile(storeDir: "$params.output/$params.amplicon_data/redundant"){ it -> ["${it.name}", it] }.map{ it -> tuple(it.baseName.split('-')[0], it) }
-    redundancy_log = remove_redundancy.out.log.collectFile(storeDir: "$params.output/${params.runinfo}", name: "remove_redundancy.log")
+    amplicon_redundancy = remove_redundancy.out.redundancy.collectFile(storeDir: "$params.output/$params.mode/$params.amplicon_data/redundant"){ it -> ["${it.name}", it] }.map{ it -> tuple(it.baseName.split('-')[0], it) }
+    remove_redundancy.out.log.collectFile(storeDir: "$params.output/$params.mode/${params.runinfo}", name: "remove_redundancy.log")
 
     nr_primersets_handle_borders = nr_primersets.map{it -> if (it.size()==2) [it[0], it[1], file(params.dummy)] else it}
     primerset_to_amplicon(nr_primersets_handle_borders)
@@ -146,7 +152,7 @@ workflow clustering {
   main:
     hdbscan(amplicon_fasta.combine(lineageDict)) // previously had primerDict as additional input
     cluster_result = hdbscan.out.amplicon_cluster
-    cluster_log = hdbscan.out.log.collectFile(name: 'hdbscan.log', storeDir: "${params.output}/${params.runinfo}")
+    hdbscan.out.log.collectFile(name: 'hdbscan.log', storeDir: "${params.output}/${params.mode}/${params.runinfo}")
   
     // [amplicon, ampliconsize, [cluster0.fasta,...clusterN.fasta], amplicon-duplicates.fasta]
     cluster_result_extended = amplicon_size.join(cluster_result).join(amplicon_redundancy)
@@ -186,45 +192,46 @@ workflow prediction{
     call_variants(cluster_fasta.combine(reference))
     // [amplicon, ampliconsize, cluster, cluster.tsv]
     allele_frequency_ch = call_variants.out.cluster_AF.filter{ it[3].baseName.contains("medaka") }
-    variant_call_log = call_variants.out.log.collectFile(storeDir: "$params.output/${params.runinfo}", name: "variant_call.log")
+    call_variants.out.log.collectFile(storeDir: "$params.output/${params.mode}/${params.runinfo}", name: "variant_call.log")
 
-    amplicon_cluster_ch = cluster_fasta.join(allele_frequency_ch, by:[0,1,2]).map{ it -> tuple(it[0], it[2], it[3].countFasta()/it[1], it[4]) }
-    prediction_input = amplicon_cluster_ch // [amplicon, cluster, clustersize/ampliconsize, cluster.tsv]
+    prediction_input = cluster_fasta.join(allele_frequency_ch, by:[0,1,2]).map{ it -> tuple(it[0], it[2], it[3].countFasta()/it[1], it[4]) }
+    // [amplicon, cluster, clustersize/ampliconsize, cluster.tsv]
 
-    lineage_prediction(prediction_input.combine(usher))
-    prediction_log = lineage_prediction.out.log.collectFile(name:'quantify_cluster_abundances.log', storeDir:"$params.output/${params.runinfo}")
+    update_reference(usher)
+    new_usher = update_reference.out
+
+    lineage_prediction(prediction_input.combine(new_usher))
+    lineage_prediction.out.log.collectFile(name:'quantify_cluster_abundances.log', storeDir:"$params.output/${params.mode}/${params.runinfo}")
     amplicon_cluster_abundances = lineage_prediction.out.abs // [amplicon, cluster, tsv]
     amplicon_ready = amplicon_cluster_abundances.map{ it -> tuple(it[0], it[2]) }.groupTuple().map{ it ->  it[0]} // [amplicon] 
 
     amplicon_quant(amplicon_ready.join(amplicon_scaler)) // input [amplicon, ampliconsize/samplesize]
     amplicon_abundances = amplicon_quant.out.abs // [amplicon, tsv]
-    amplicon_quant_log = amplicon_quant.out.log.collectFile(name:'quantify_amplicon_abundances.log', storeDir:"$params.output/${params.runinfo}")
+    amplicon_quant.out.log.collectFile(name:'quantify_amplicon_abundances.log', storeDir:"$params.output/${params.mode}/${params.runinfo}")
 
     sample_abundances = amplicon_abundances.map{ it -> it[1] }.collectFile(keepHeader: true, skip: 1, name:"scaled_amplicon_abundances.tsv") // [tsv]
 
-    aggregate_abundances(sample_abundances, Channel.value(params.threshold))
-    fp_ch = aggregate_abundances.out.FP
-    if (fp_ch.count() == 0) {
-      final_output = aggregate_abundances.out.abs // [tsv]
-      final_log = aggregate_abundances.out.log.collectFile(name:'sample_abundances.log', storeDir:"${params.output}/${params.runinfo}")
+    aggregate_abundances(sample_abundances, new_usher, Channel.value(params.threshold))
+    fp_update = aggregate_abundances.out.csv
+    if ( fp_update.splitCsv(header: false, skip: 1).map{ row -> row[-1].toInteger() }.sum() == 0 ) {
+      final_output = aggregate_abundances.out.abs.collect() // [tsv]    
     }
     else{
-      update_reference(usher.combine(fp_ch))
-      updated_reference = update_reference.out.dataframe
-      lineage_prediction_repeat(prediction_input.combine(updated_reference))
-      prediction_log_repeat = lineage_prediction_repeat.out.log.collectFile(name:'quantify_cluster_abundances.log', storeDir:"$params.output/${params.runinfo}")
+      aggregate_abundances.out.fp_log.collectFile(name:"false_positive_detection.log", storeDir:"$params.output/${params.mode}/${params.runinfo}")
+      lineage_prediction_repeat(prediction_input.combine(fp_update))
+      lineage_prediction_repeat.out.log.collectFile(name:'quantify_cluster_abundances.log', storeDir:"$params.output/${params.mode}/${params.runinfo}")
       amplicon_cluster_abundances_repeat = lineage_prediction_repeat.out.abs // [amplicon, cluster, tsv]
       amplicon_ready_repeat = amplicon_cluster_abundances_repeat.map{ it -> tuple(it[0], it[2]) }.groupTuple().map{ it ->  it[0]} // [amplicon] 
 
       amplicon_quant_repeat(amplicon_ready_repeat.join(amplicon_scaler)) // input [amplicon, ampliconsize/samplesize]
       amplicon_abundances_repeat = amplicon_quant_repeat.out.abs // [amplicon, tsv]
-      amplicon_quant_log_repeat = amplicon_quant_repeat.out.log.collectFile(name:'quantify_amplicon_abundances.log', storeDir:"$params.output/${params.runinfo}")
+      amplicon_quant_repeat.out.log.collectFile(name:'quantify_amplicon_abundances.log', storeDir:"$params.output/${params.mode}/${params.runinfo}")
 
       sample_abundances_repeat = amplicon_abundances_repeat.map{ it -> it[1] }.collectFile(keepHeader: true, skip: 1, name:"scaled_amplicon_abundances.tsv") // [tsv]
 
-      aggregate_abundances_repeat(sample_abundances_repeat, Channel.value(0))
-      final_output = aggregate_abundances_repeat.out.abs // [tsv]
-      final_log_repeat = aggregate_abundances_repeat.out.log.collectFile(name:'sample_abundances.log', storeDir:"$params.output/${params.runinfo}")
+      aggregate_abundances_repeat(sample_abundances_repeat, fp_update, Channel.value(0))
+      final_output = aggregate_abundances_repeat.out.abs.collect() // [tsv]
+      // final_log_repeat = aggregate_abundances_repeat.out.log.collectFile(name:'sample_abundances.log', storeDir:"$params.output/${params.runinfo}")
     }
 
   emit:
@@ -233,21 +240,38 @@ workflow prediction{
 }
 
 workflow {
-
-  if (params.prepare_mixture) {
-    prepare_mixture()
-    lineageDict = prepare_mixture.out.lineageDict
-    fasta = prepare_mixture.out.fasta
+  // in simulation mode either prepare a mixture or load an already prepared one
+  if (params.mode == 'simulation') {
+    if (params.prepare_mixture) {
+      prepare_mixture()
+      lineageDict = prepare_mixture.out.lineageDict
+      fasta = prepare_mixture.out.fasta
+    }
+    else {
+      lineageDict = Channel.fromPath("$params.output/$params.mode/input/lineageDict.csv")
+      fasta = Channel.fromPath("$params.output/$params.mode/input/query.fasta")
+    }
+  }
+  // in real data mode, convert fastq file to fasta
+  else {
+    input_ch = Channel.fromPath(params.fastq)
+    fastq_to_fasta(input_ch)
+    fasta = fastq_to_fasta.out
+    lineageDict = Channel.fromPath(params.dummy)
   }
   lineageDict.view()
   fasta.view()
 
+  // sort reads into amplicons or load already sorted amplicon FASTAs and redundancy data
+  // from either the simulation or real data input folder
   if (params.sort_reads) {
     get_amplicon_reads(fasta)
     amplicon_fasta = get_amplicon_reads.out.amplicon_ch 
     amplicon_redundancy = get_amplicon_reads.out.amplicon_redundancy
   }
   else {
+    amplicon_ch = Channel.fromPath("$params.output/$params.mode/$params.amplicon_data/final/*.fasta")
+    amplicon_redundancy_ch = Channel.fromPath("$params.output/$params.mode/$params.amplicon_data/redundant/*.fasta")
     // [amplicon, amplicon.fasta]
     amplicon_fasta = amplicon_ch.map{ it -> tuple(it.baseName, it) }
     // [amplicon, amplicon-duplicates.fasta]
@@ -270,7 +294,11 @@ workflow {
   abundances.view()
 
 }  
-  
+
+workflow.onComplete {
+    println "Pipeline completed at: $workflow.complete"
+    println "Execution status: ${ workflow.success ? 'OK' : 'failed' }"
+}  
 
 //  TODO
 def helpMSG() {
@@ -283,46 +311,56 @@ def helpMSG() {
     log.info """
     ____________________________________________________________________________________________
 
-    ${c_green}Welcome to ViralClust - your pipeline to cluster viral genome sequences once and for all!${c_reset}
+    ${c_green}Welcome to ACWLA - your pipeline to estimate SARS-CoV-2 lineage abundances from wastewater sequencing data !${c_reset}
     ____________________________________________________________________________________________
 
     ${c_yellow}Usage example:${c_reset}
-    nextflow run viralclust.nf --fasta "genomes.fasta"
+    If you need to analyse a fastq sample from wastewater sequencing:
+    nextflow run main.nf --fastq FASTQ --bed BED --primer TSV 
+
+    If you need to create an equally mixed sample from a number of fastq files. Assuming that
+    every fastq sample contains sequencing reads from only one lineage.
+    nextflow run main.nf --mode simulation --prepare_mixture --mixture_fastqs PATH/TO/FASTQS --mixture_lineages CSV
 
     ____________________________________________________________________________________________
 
     ${c_yellow}Mandatory Input:${c_reset}
-    ${c_green}--fastq PATH${c_reset}                      Path to the input fastq file, storing the sequencing reads.
-    ${c_green}--lineageDict PATH${c_reset}                Path to a json file mapping the read ids ids to their pangolin annotation
-    ____________________________________________________________________________________________
+    ${c_green}--fastq FILEPATH${c_reset}                  Path to fastq file containing wastewater seq reads
+    ${c_green}--mixture_fastqs PATH${c_reset}             Path to folder containing single-lineage fastq files
+    ${c_green}--mixture_lineages FILEPATH${c_reset}       Path to csv file mapping fastq file names to their lineage annotation
+                                                          (csv is comma-separated)
+    ${c_green}--primer${c_reset}
+    ${c_green}--bed${c_reset}
 
-    ${c_yellow}Options:${c_reset}
-    ${c_green}--eval${c_reset}                            TODO: After clustering, calculate basic statistics of clustering results. For each
+    ${c_yellow}Other Input:${c_reset}
+    ${c_green}--reference${c_reset}
+    ${c_green}--usher${c_reset}
+
+    ${c_yellow}Pipeline Options:${c_reset}
+    ${c_green}--mode${c_reset}                            TODO: After clustering, calculate basic statistics of clustering results. For each
                                       tool, the minimum, maximum, average and median cluster sizes are calculated,
                                       as well as the average distance of two representative genomes.
-    ${c_yellow}Cluster options:${c_reset}
+    ${c_green}--sort_reads${c_reset}
+    ${c_green}--prepare_mixture${c_reset}
+    ${c_green}--threshold${c_reset}
+    ${c_green}--min_read_len${c_reset}
     ${c_green}--hdbscan_params${c_reset}                  Additional parameters for UMAP and HDBscan cluster analysis. [default $params.hdbscan_params]
                                       For more information and options, please use
                                       ${c_green}nextflow run viralclust.nf --hdbscan_help${c_reset}.
-    ${c_yellow}Computing options:${c_reset}
+    
+    ${c_yellow}Other Options:${c_reset}
     ${c_green}--cores INT${c_reset}                       max cores per process for local use [default $params.cores]
     ${c_green}--max_cores INT${c_reset}                   max cores used on the machine for local use [default $params.max_cores]
     ${c_green}--memory INT${c_reset}                      max memory in GB for local use [default $params.memory]
     ${c_green}--output PATH${c_reset}                     name of the result folder [default $params.output]
-    ${c_green}--permanentCacheDir PATH${c_reset}          location for auto-download data like databases [default $params.permanentCacheDir]
-    ${c_green}--condaCacheDir PATH${c_reset}              location for storing the conda environments [default $params.condaCacheDir]
-    ${c_green}--workdir PATH${c_reset}                    working directory for all intermediate results [default $params.workdir]
-
+                                          
     ${c_yellow}Nextflow options:${c_reset}
-    ${c_green}-with-report rep.html${c_reset}             cpu / ram usage (may cause errors)
-    ${c_green}-with-dag chart.html${c_reset}              generates a flowchart for the process tree
-    ${c_green}-with-timeline time.html${c_reset}          timeline (may cause errors)
     ${c_reset}____________________________________________________________________________________________
 
     """.stripIndent()
 }
 
-def ClusterHelp() {
+def hdbscanHelp() {
   c_reset = "\033[0m";
   c_red = "\033[1;31m"
   c_green = "\033[1;32m";

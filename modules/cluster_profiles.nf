@@ -70,7 +70,7 @@ Call variants within an amplicon.
 ************************************************************************/
 process call_variants {
   label 'medaka'
-  publishDir "${params.output}/${params.hdbscan_output}/variants/${amplicon}", mode: 'copy', pattern: "*.medaka.annotate.vcf.tsv"
+  publishDir "${params.output}/${params.mode}/${params.hdbscan_output}/variants/${amplicon}", mode: 'copy', pattern: "*.medaka.annotate.vcf.tsv"
 
   input:
     tuple val(amplicon), val(amplicon_size), val(cluster), path(fasta), path(reference)

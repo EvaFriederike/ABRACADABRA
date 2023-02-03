@@ -14,6 +14,7 @@ import numpy as np
 sequenceFile = sys.argv[1]
 primerFile = sys.argv[2]
 readcount = sys.argv[3]
+mismatch_cutoff = sys.argv[4]
 df = pd.read_csv(primerFile, sep='\t')
 
 
@@ -29,7 +30,7 @@ for header, sequence in utils.parse_fasta(sequenceFile):
     match_count = 0
     matching_primer = []
     for i,r in df.iterrows():
-        m = re.findall('('+r.seq+'){s<=2}', sequence)
+        m = re.findall('('+r.seq+'){s<='+mismatch_cutoff+'}', sequence)
         if len(m) != 0:
             match_count += 1
             matching_primer.append(r['name'])
@@ -48,7 +49,7 @@ for header, sequence in utils.parse_fasta(sequenceFile):
         # get starting positions of every matched primer in the read
         for primer in matching_primer:
             primer_seq = df.loc[df['name']==primer].seq.item()
-            s = re.search('('+primer_seq+'){s<=2}', sequence).start()
+            s = re.search('('+primer_seq+'){s<='+mismatch_cutoff+'}', sequence).start()
             start_pos[primer] = s
         # catch first subread (this includes matching primer AND some remaining adapter seq)
         start_pos_sorted = sorted(start_pos.items(), key= lambda x: x[1])
@@ -80,7 +81,7 @@ log.close()
 
 # write output fasta files   
 for k,v in tmp.items():
-    f = open(f"output/{k}.fasta", 'w')
+    f = open(f"{k}.fasta", 'w')
     for r in v:
         f.write(f">{r[0]}\n{r[1]}\n")
     f.close()

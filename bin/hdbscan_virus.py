@@ -108,7 +108,6 @@ import umap.plot
 import matplotlib.pyplot as plt
 import hdbscan
 from sklearn.preprocessing import normalize
-from sklearn.metrics import adjusted_rand_score, adjusted_mutual_info_score
 
 
 ########################################################
@@ -206,7 +205,7 @@ class Clusterer(object):
     Clusterer.dim = len(fastaContent)
     Clusterer.matrix = np.zeros(shape=(Clusterer.dim, Clusterer.dim), dtype=float)
     # for hdbscan, the data set size has to be larger or equal to min_samples
-    if len(fastaContent) < 5:
+    if len(fastaContent) < 2:
       return 1
     return fastaContent
 
@@ -234,7 +233,7 @@ class Clusterer(object):
 
     self.d_sequences = self.read_sequences()
     if self.d_sequences == 1:
-      logger.warn("{self.d_sequences} are too few for clustering")
+      logger.warn(f"{self.d_sequences} sequence(s) are too few for clustering")
       import shutil
       shutil.copyfile(self.sequenceFile, f'{self.outdir}/{os.path.splitext(os.path.basename(self.sequenceFile))[0]}_hdbscan.fasta')
       return 1
@@ -284,7 +283,7 @@ class Clusterer(object):
     """
     """
     profiles = [(idx,profile) for idx, profile in Clusterer.d_profiles.items() if idx in self.d_sequences]
-    vector = [x[1] for x in profiles]
+    vector = np.array([x[1] for x in profiles])
     clusterable_embedding = umap.UMAP(
                 n_neighbors=2*self.neighbors,
                 min_dist=self.threshold,
@@ -299,13 +298,14 @@ class Clusterer(object):
                 random_state=42,
                 metric=self.metric
             ).fit(vector)
-    print(f"Size of UMAP clusterable data, visual data, and number of lineage labels:, {len(clusterable_embedding)}, {len(visual_embedding.embedding_)}, {len(Clusterer.header2lineage.values())}")
-    # Plot UMAPped reads with lineage assignment
-    fig, ax = plt.subplots()
-    ax = umap.plot.points(visual_embedding, labels=np.array(list(Clusterer.header2lineage.values())))
-    ax.set_title('UMAP embedding of input reads (colored by lineage assignment)')
-    plt.savefig('umap_lineageplot.png')
-    plt.close()
+    if 'dummy' not in self.lineageDict:
+      print(f"Size of UMAP clusterable data, visual data, and number of lineage labels:, {len(clusterable_embedding)}, {len(visual_embedding.embedding_)}, {len(Clusterer.header2lineage.values())}")
+      # Plot UMAPped reads with lineage assignment
+      fig, ax = plt.subplots()
+      ax = umap.plot.points(visual_embedding, labels=np.array(list(Clusterer.header2lineage.values())))
+      ax.set_title('UMAP embedding of input reads (colored by lineage assignment)')
+      plt.savefig('umap_lineageplot.png')
+      plt.close()
 
     # Plot UMAPped reads with primer location
     # fig, ax = plt.subplots()
@@ -331,7 +331,6 @@ class Clusterer(object):
     #   shutil.copyfile(self.sequenceFile, f'{self.outdir}/{os.path.splitext(os.path.basename(self.sequenceFile))[0]}_hdbscan.fasta')
     #   return 1
 
-    adj_rs = adjusted_rand_score(list(Clusterer.header2lineage.values()), self.clusterlabel)
     self.allCluster = list(zip([x[0] for x in profiles], self.clusterlabel))
 
 
@@ -363,7 +362,7 @@ class Clusterer(object):
     plt.close()
     fig, ax = plt.subplots()
     ax = umap.plot.points(visual_embedding, labels=self.clusterlabel)
-    ax.set_title(f'UMAP embedding colored by HDBSCAN cluster (ARI={adj_rs})')
+    ax.set_title(f'UMAP embedding colored by HDBSCAN cluster')
     plt.savefig('umap_clusterplot.png')
     plt.close()
 
@@ -451,14 +450,15 @@ def perform_clustering():
   virusClusterer = Clusterer(logger, inputSequences, lineageDict, primerDict, outdir,  k, proc, metric, neighbors, threshold, dimension, clusterSize, minSample)
 
   logger.info("Determining k-mer profiles for all sequences.")
-  virusClusterer.determine_profile(multiPool)
-  logger.info("Read lineage annotations for all sequences")
-  virusClusterer.get_lineage_annotations()
+  code = virusClusterer.determine_profile(multiPool)
+  if code == 1:
+    __abort_cluster(virusClusterer, inputSequences)
+    return 0
+  if 'dummy' not in virusClusterer.lineageDict:
+    logger.info("Read lineage annotations for all sequences")
+    virusClusterer.get_lineage_annotations()
   logger.info("Clustering with UMAP and HDBSCAN.")
   code = virusClusterer.apply_umap()
-  #if code == 1:
-  #  __abort_cluster(virusClusterer, inputSequences)
-  #  return 0
   clusterInfo = virusClusterer.clusterlabel
   logger.info(f"Summarized {virusClusterer.dim} sequences into {clusterInfo.max()+1} clusters. Filtered {np.count_nonzero(clusterInfo == -1)} sequences due to uncertainty.")
 
@@ -662,7 +662,7 @@ if __name__ == "__main__":
   logger = create_logger()
   (inputSequences, lineageDict, primerDict, outdir, k, proc, metric, neighbors, threshold, dimension, clusterSize, minSample, clusterThreshold) = parse_arguments(docopt(__doc__))
 
-  logger.info("Starting to cluster you data. Stay tuned.")
+  logger.info("Starting to cluster your data. Stay tuned.")
   perform_clustering()
   if os.path.islink(f"{os.path.dirname(outdir)}/latest"):
     os.remove(f"{os.path.dirname(outdir)}/latest")

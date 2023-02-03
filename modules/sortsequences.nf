@@ -5,7 +5,7 @@ with highest ORF density).
 
 process sort_sequences {
   label 'sortseq'
-  publishDir "${params.output}/${params.amplicon_data}/positive_sorted", mode: 'copy', pattern: "*_positive.fasta"
+  publishDir "${params.output}/${params.mode}/${params.amplicon_data}/positive_sorted", mode: 'copy', pattern: "*_positive.fasta"
 
   input:
     tuple val(primer_name), path(primer_fasta) 
@@ -33,7 +33,7 @@ process read_filtering {
 
   output:
     tuple val(name), path("filtered_${fasta}"), emit: filtered
-    path ".command.log"
+    path ".command.log", emit: log
 
   script:
     """
@@ -61,8 +61,8 @@ respective amplicon.
 **************************************************************************************************/
 process primer_sort {
   label 'sortseq'
-  publishDir "${params.output}/${params.amplicon_data}/primer_sorted", mode: 'copy', pattern: "*.fasta"
-  publishDir "${params.output}/${params.runinfo}", mode: 'copy', pattern: "primer_sort.log"
+  publishDir "${params.output}/${params.mode}/${params.amplicon_data}/primer_sorted", mode: 'copy', pattern: "*.fasta"
+  publishDir "${params.output}/${params.mode}/${params.runinfo}", mode: 'copy', pattern: "primer_sort.log"
   
   input:
     tuple path(fasta), path(primer)
@@ -76,7 +76,7 @@ process primer_sort {
   """
     #!/bin/bash
     readcount=\$(grep -c '>' ${fasta.baseName}.fasta)
-    python ${baseDir}/bin/primer_sort.py $fasta $primer \$readcount
+    python ${baseDir}/bin/primer_sort.py $fasta $primer \$readcount $params.max_primer_mismatch
         
   """
 }

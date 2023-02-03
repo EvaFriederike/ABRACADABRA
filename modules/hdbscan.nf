@@ -9,8 +9,8 @@ Notes:
 
 process hdbscan {
   label 'hdbscan'
-  publishDir "${params.output}/${params.eval_output}/${amplicon_id}", mode: 'copy', pattern: '*.png'
-  publishDir "${params.output}/${params.hdbscan_output}/${amplicon_id}", mode: 'copy', pattern: 'cluster*.fasta'
+  publishDir "${params.output}/${params.mode}/${params.eval_output}/${amplicon_id}", mode: 'copy', pattern: '*.png'
+  publishDir "${params.output}/${params.mode}/${params.hdbscan_output}/${amplicon_id}", mode: 'copy', pattern: 'cluster*.fasta'
 
 
   input:
@@ -19,26 +19,26 @@ process hdbscan {
 
   output:
     tuple val(amplicon_id), path("cluster*.fasta"), emit: amplicon_cluster, optional: true
-    path "*.png"
+    path "*.png", optional: true
     path ".command.log", emit: log
 
   script:
-  """
-    #!/bin/bash
+    """
+      #!/bin/bash
 
-    touch dummy.json 
-    echo "------------------- Amplicon ${amplicon_id} -------------------"
+      touch dummy.json 
+      echo "------------------- Amplicon ${amplicon_id} -------------------"
 
-    python3 ${baseDir}/bin/hdbscan_virus.py -v -p $task.cpus $params.hdbscan_params ${amplicon_id}.fasta $lineageDict dummy.json 2> hdbscan.log
-    cat hdbscan.log >> .command.log
-    
-    touch cluster-1.fasta
-    #less cluster-1.fasta
-    mv cluster-1.fasta  "${amplicon_id}_hdbscan_UNCLUSTERED.fasta"
-    cluster_count=\$(wc -l cluster*.fasta)
-    if [ \$cluster_counts -eq 0 ]; then
-      echo "No read clusters will be included into lineage detection (due to only noise or too few reads in the cluster)"
+      python3 ${baseDir}/bin/hdbscan_virus.py -v -p $task.cpus $params.hdbscan_params ${amplicon_id}.fasta $lineageDict dummy.json 2> hdbscan.log
+      cat hdbscan.log >> .command.log
+      
+      if [ -f cluster*.fasta ]; then
+        touch cluster-1.fasta
+        mv cluster-1.fasta  "${amplicon_id}_hdbscan_UNCLUSTERED.fasta"  
+      else
+        echo "No read clusters will be included into lineage detection (due to only noise or too few reads in the cluster)"
+      fi
+      
 
-  """
-
+    """
 }

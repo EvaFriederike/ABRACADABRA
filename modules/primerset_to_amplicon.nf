@@ -7,7 +7,7 @@ merging them into amplicon variants
 /******************************************************************************/
 
 process primerset_to_amplicon {
-  publishDir "${params.output}/${params.amplicon_data}/final", mode: 'copy', pattern: "${amplicon}.fasta"
+  publishDir "${params.output}/${params.mode}/${params.amplicon_data}/final", mode: 'copy', pattern: "${amplicon}.fasta"
 
 
   input:
