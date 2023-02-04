@@ -73,10 +73,10 @@ process call_variants {
   publishDir "${params.output}/${params.mode}/${params.hdbscan_output}/variants/${amplicon}", mode: 'copy', pattern: "*.medaka.annotate.vcf.tsv"
 
   input:
-    tuple val(amplicon), val(amplicon_size), val(cluster), path(fasta), path(reference)
+    tuple val(amplicon), val(cluster), path(fasta), path(reference)
 
   output:
-    tuple val(amplicon), val(amplicon_size), val(cluster), path("*.tsv"), emit: cluster_AF
+    tuple val(amplicon), val(cluster), path("out_${fasta}"), path("*.tsv"), emit: cluster_AF
     path ".command.log", emit: log
    
   script:
@@ -96,12 +96,14 @@ process call_variants {
   if [ \$(grep -c -v '^#' ${cluster}.medaka.vcf) -gt 0 ]; then
     medaka tools annotate ${cluster}.medaka.vcf $reference  ${cluster}.sorted.bam ${cluster}.medaka.annotate.vcf
     medaka tools vcf2tsv ${cluster}.medaka.annotate.vcf
+    cp $fasta out_$fasta
   else
     touch fail.tsv
     echo "--------------------------------------------------------\n"
     echo "No variants detected for ${cluster}"
     n_reads=\$(grep -c '>' $fasta)
     echo "This leads to missing information from \${n_reads} reads and reduces the overall relative abundances of detected lineages in the analysed sample!!\n"
+    touch out_$fasta
   fi
   """
 }

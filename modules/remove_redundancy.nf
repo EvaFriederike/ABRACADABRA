@@ -36,10 +36,10 @@ process add_redundancy {
   label 'remove'
 
   input:
-    tuple val(amplicon), val(amplicon_size), path(cluster_fasta), path(duplicates_fasta)
+     tuple val(amplicon), path(cluster_fasta), path(duplicates_fasta)
 
   output:
-    tuple val(amplicon), val(amplicon_size), val("redundant_${cluster_fasta.baseName}"), path("redundant_${cluster_fasta}")
+    tuple val(amplicon), val("redundant_${cluster_fasta.baseName}"), path("redundant_${cluster_fasta}")
     
   script:
   """

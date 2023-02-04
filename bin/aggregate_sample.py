@@ -42,6 +42,8 @@ if len(fps) > 0:
 else:
     print(f"The final lineage abundances sum to {round(final_abundances.sum().item()*100,2)}% ")
 
-print(final_abundances.head())
+if final_abundances.loc['unknown','relative abundance'] < T:
+    final_abundances.drop(index='unknown', inplace=True)
+
 final_abundances.to_csv(output, sep='\t')
 

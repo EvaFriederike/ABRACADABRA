@@ -49,7 +49,12 @@ if (params.mode == 'simulation' && params.sort_reads && params.mixture_lineages=
     exit 1, "ERROR: Please input a csv file with lineage annotation for the input mix-in samples!"
 }
 if (params.mode == 'real' && params.fastq=='') {
+  if (params.sort_reads){
     exit 1, "ERROR: Please input fastq file!"
+  }
+}
+if (params.sort_reads) {
+  if (params.bed == '' || params.primer == '') { exit 1, "ERROR: Please input the required bed and tsv file for the primer panel" }
 }
 
 log.info """\
@@ -146,7 +151,6 @@ workflow clustering {
     amplicon_fasta
     lineageDict
     amplicon_redundancy
-    amplicon_size
     //primerDict
 
   main:
@@ -154,8 +158,8 @@ workflow clustering {
     cluster_result = hdbscan.out.amplicon_cluster
     hdbscan.out.log.collectFile(name: 'hdbscan.log', storeDir: "${params.output}/${params.mode}/${params.runinfo}")
   
-    // [amplicon, ampliconsize, [cluster0.fasta,...clusterN.fasta], amplicon-duplicates.fasta]
-    cluster_result_extended = amplicon_size.join(cluster_result).join(amplicon_redundancy)
+    // [amplicon, [cluster0.fasta,...clusterN.fasta], amplicon-duplicates.fasta]
+    cluster_result_extended = cluster_result.join(amplicon_redundancy)
     add_redundancy(cluster_result_extended.transpose())
     redundant_cluster_result = add_redundancy.out
     //results_channel = Channel.value('HDBSCAN').combine(hdbscan.out.hdbscan_out)
@@ -184,18 +188,30 @@ workflow clustering {
 
 workflow prediction{
   take:
-    cluster_fasta // [amplicon, ampliconsize, cluster, cluster.fasta]
-    amplicon_scaler // [amplicon, ampliconsize/samplesize]
+    cluster_fasta // [amplicon, cluster, cluster.fasta]
 
   main:
     // First, split cluster by primer?
     call_variants(cluster_fasta.combine(reference))
-    // [amplicon, ampliconsize, cluster, cluster.tsv]
+    // [amplicon, cluster, cluster.fasta, cluster.tsv]
     allele_frequency_ch = call_variants.out.cluster_AF.filter{ it[3].baseName.contains("medaka") }
+    // [amplicon, ampliconsize]
+    amplicon_size = allele_frequency_ch.map{ it -> tuple(it[0], it[2].countFasta()) }.groupTuple().map{ it -> tuple(it[0], it[1].sum()) }
+    amplicon_cluster_map = allele_frequency_ch.map{ it -> tuple(it[0], it[1]) }.groupTuple() // [amplicon, [cluster1,...,clustern]]
+    // [amplicon, cluster, ampliconsize]
+    amplicon_size_cluster_map = amplicon_cluster_map.join(amplicon_size).transpose()
+    amplicon_size.view()
+    sample_size = amplicon_size.map{ it -> it[1] }.sum() 
+    sample_size.view()
     call_variants.out.log.collectFile(storeDir: "$params.output/${params.mode}/${params.runinfo}", name: "variant_call.log")
-
-    prediction_input = cluster_fasta.join(allele_frequency_ch, by:[0,1,2]).map{ it -> tuple(it[0], it[2], it[3].countFasta()/it[1], it[4]) }
-    // [amplicon, cluster, clustersize/ampliconsize, cluster.tsv]
+    
+    //[amplicon, cluster, clustersize/ampliconsize, cluster.tsv]
+    prediction_input = amplicon_size_cluster_map.join(allele_frequency_ch, by: [0,1]).map{ it -> tuple(it[0], it[1], it[3].countFasta()/it[2], it[4]) }
+    prediction_input.view()
+  
+    // [amplicon, ampliconsize/samplesize]
+    amplicon_scaler = amplicon_size.combine(sample_size).map{ it -> tuple(it[0], it[1]/it[2]) } 
+    amplicon_scaler.view()
 
     update_reference(usher)
     new_usher = update_reference.out
@@ -251,17 +267,21 @@ workflow {
       lineageDict = Channel.fromPath("$params.output/$params.mode/input/lineageDict.csv")
       fasta = Channel.fromPath("$params.output/$params.mode/input/query.fasta")
     }
+    lineageDict.view()
+    fasta.view()
   }
   // in real data mode, convert fastq file to fasta
   else {
-    input_ch = Channel.fromPath(params.fastq)
-    fastq_to_fasta(input_ch)
-    fasta = fastq_to_fasta.out
+    if (params.sort_reads) {
+      input_ch = Channel.fromPath(params.fastq)
+      fastq_to_fasta(input_ch)
+      fasta = fastq_to_fasta.out  
+      fasta.view()
+    }
     lineageDict = Channel.fromPath(params.dummy)
+    lineageDict.view()
   }
-  lineageDict.view()
-  fasta.view()
-
+  
   // sort reads into amplicons or load already sorted amplicon FASTAs and redundancy data
   // from either the simulation or real data input folder
   if (params.sort_reads) {
@@ -277,19 +297,12 @@ workflow {
     // [amplicon, amplicon-duplicates.fasta]
     amplicon_redundancy = amplicon_redundancy_ch.map{ it -> tuple(it.baseName.split('-')[0], it) }
   }
-  amplicon_fasta.view()
-  amplicon_size = amplicon_fasta.join(amplicon_redundancy).map{ it -> tuple(it[0], it[1].countFasta()+it[2].countFasta())} // [amplicon, size]
-  amplicon_size.view()
-  sample_size = amplicon_size.map{ it -> it[1] }.sum() // [size]
-  sample_size.view()
-  // [amplicon, ampliconsize/samplesize]
-  amplicon_scaler = amplicon_size.combine(sample_size).map{ it -> tuple(it[0], it[1]/it[2]) } 
 
-  clustering(amplicon_fasta, lineageDict, amplicon_redundancy, amplicon_size) // previously: primerdict included
-  cluster_fasta = clustering.out.redundant_cluster_result // [amplicon, ampliconsize, clusterX, clusterX.fasta]
-  //evaluation(clustering.out.cluster_result, get_amplicon_reads.out.primerDict)
-      
-  prediction(cluster_fasta, amplicon_scaler)
+  clustering(amplicon_fasta, lineageDict, amplicon_redundancy) //previously: primerdict included
+  cluster_fasta = clustering.out.redundant_cluster_result // [amplicon,clusterX, clusterX.fasta]
+  //evaluation(clustering.out.cluster_result, get_amplicon_reads.out.primerDict) 
+  
+  prediction(cluster_fasta)
   abundances = prediction.out.final_output
   abundances.view()
 

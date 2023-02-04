@@ -39,7 +39,7 @@ process read_filtering {
     """
     #!/bin/bash
 
-    echo "Filter ${name} for very short reads"
+    echo "--------------Filter ${name} for very short reads"
     seqkit seq -m $params.min_read_len $fasta > filtered_${fasta}
     B=\$(grep -c '>' $fasta)
     A=\$(grep -c '>' filtered_${fasta})
