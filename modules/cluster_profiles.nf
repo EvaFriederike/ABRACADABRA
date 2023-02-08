@@ -67,10 +67,13 @@ Option:
 
 /************************************************************************
 Call variants within an amplicon.
+Notes:
+- maybe I need to use another alingment method or another alignment mode 
+than map-ont to map Illunina reads?
 ************************************************************************/
 process call_variants {
   label 'medaka'
-  publishDir "${params.output}/${params.mode}/${params.hdbscan_output}/variants/${amplicon}", mode: 'copy', pattern: "*.medaka.annotate.vcf.tsv"
+  publishDir "${params.output}/${params.hdbscan_output}/variants/${amplicon}", mode: 'copy', pattern: "*.tsv"
 
   input:
     tuple val(amplicon), val(cluster), path(fasta), path(reference)
@@ -80,48 +83,82 @@ process call_variants {
     path ".command.log", emit: log
    
   script:
+  if ("${params.variant_caller}" == "medaka")
+    """
+    #!/bin/bash
+
+    echo "------------------- Amplicon ${amplicon} -------------------\n"
+    echo \$PWD
+
+    minimap2 -ax map-ont $reference $fasta -t $task.cpus > ${cluster}.sam
+    samtools view -S -b -h ${cluster}.sam > ${cluster}.bam
+    samtools sort ${cluster}.bam > ${cluster}.sorted.bam
+    samtools index -c ${cluster}.sorted.bam  
+
+    medaka consensus --model r941_min_sup_g507 --threads $task.cpus ${cluster}.sorted.bam ${cluster}.medaka.consensus.hdf
+    medaka variant $reference ${cluster}.medaka.consensus.hdf ${cluster}.medaka.vcf
+
+    if [ \$(grep -c -v '^#' ${cluster}.medaka.vcf) -gt 0 ]; then
+      medaka tools annotate ${cluster}.medaka.vcf $reference  ${cluster}.sorted.bam ${cluster}.medaka.annotate.vcf
+      medaka tools vcf2tsv ${cluster}.medaka.annotate.vcf
+
+      cp $fasta out_$fasta
+    else
+      touch fail.tsv
+      echo "--------------------------------------------------------\n"
+      echo "No variants detected for ${cluster}"
+      n_reads=\$(grep -c '>' $fasta)
+      echo "This leads to missing information from \${n_reads} reads and reduces the overall relative abundances of detected lineages in the analysed sample!!\n"
+      touch out_$fasta
+    fi
+    """
+  else if ("${params.variant_caller}"=='ivar')
   """
-  #!/bin/bash
+    #!/bin/bash
 
-  echo "------------------- Amplicon ${amplicon} -------------------\n"
+    echo "------------------- Amplicon ${amplicon} -------------------\n"
+    echo \$PWD
 
-  minimap2 -ax map-ont $reference $fasta -t $task.cpus > ${cluster}.sam
-  samtools view -S -b -h ${cluster}.sam > ${cluster}.bam
-  samtools sort ${cluster}.bam > ${cluster}.sorted.bam
-  samtools index -c ${cluster}.sorted.bam  
+    minimap2 -ax map-ont $reference $fasta -t $task.cpus > ${cluster}.sam
+    samtools view -S -b -h ${cluster}.sam > ${cluster}.bam
+    samtools sort ${cluster}.bam > ${cluster}.sorted.bam
+    samtools index -c ${cluster}.sorted.bam  
 
-  medaka consensus --model r941_min_sup_g507 --threads $task.cpus --chunk_len 800 --chunk_ovlp 400 ${cluster}.sorted.bam ${cluster}.medaka.consensus.hdf
-  medaka variant $reference ${cluster}.medaka.consensus.hdf ${cluster}.medaka.vcf
+    samtools mpileup -aa -A -d 600000 -B -Q 20 -q 0 -B -f $reference ${cluster}.sorted.bam | ivar variants -p ${cluster} -q 20 -t 0 -r $reference  
 
-  if [ \$(grep -c -v '^#' ${cluster}.medaka.vcf) -gt 0 ]; then
-    medaka tools annotate ${cluster}.medaka.vcf $reference  ${cluster}.sorted.bam ${cluster}.medaka.annotate.vcf
-    medaka tools vcf2tsv ${cluster}.medaka.annotate.vcf
-    cp $fasta out_$fasta
-  else
-    touch fail.tsv
-    echo "--------------------------------------------------------\n"
-    echo "No variants detected for ${cluster}"
-    n_reads=\$(grep -c '>' $fasta)
-    echo "This leads to missing information from \${n_reads} reads and reduces the overall relative abundances of detected lineages in the analysed sample!!\n"
-    touch out_$fasta
-  fi
-  """
+    VAR=\$(wc -l ${cluster}.tsv | cut -d' ' -f1)
+    if [ \$VAR -le 1 ]; then
+      touch fail.tsv
+      echo "--------------------------------------------------------\n"
+      echo "No variants detected for ${cluster}"
+      n_reads=\$(grep -c '>' $fasta)
+      echo "This leads to missing information from \${n_reads} reads and reduces the overall relative abundances of detected lineages in the analysed sample!!\n"
+      touch out_$fasta
+    else
+      python $projectDir/bin/edit_tsv.py ${cluster}.tsv
+      cp $fasta out_$fasta      
+    fi
+
+    """
 }
 
 
 
-// process mutation_heatmap {
-//   publishDir "${params.output}/${params.eval_output}", mode: 'copy', pattern: "*medaka_profile.png"
+process plot_mutation_profiles {
+  label 'sortseq'
+  publishDir "${params.output}/${params.eval_output}/${amplicon}", mode: 'copy', pattern: "*.png"
 
-//   input:
-//     val bam_path
+  input:
+    tuple val(amplicon), val(ampliconsize)
 
-//   output:
-//     path "${bam_path.split('/')[-1]}_medaka_profile.png"
+  output:
+    tuple val(amplicon), val(ampliconsize), emit:fwd
+    path "${amplicon}_mutation_profile.png"
 
-//   script:
-//   """
-//   Rscript ${projectDir}/bin/MutationProfile.r medaka $bam_path *.vcf medaka_profile
-//   """
+  script:
+  """
+  #!/bin/bash
+  python3 ${projectDir}/bin/mutationprofile.py ${params.output}/${params.hdbscan_output}/variants/${amplicon} $amplicon
+  """
 
-// }
+}

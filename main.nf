@@ -12,8 +12,8 @@ if (params.help) {
   exit 0, helpMSG()
 }
 
-if (params.hdbscan_help) {
-  exit 0, hdbscanHelp()
+if (params.ClusterHelp) {
+  exit 0, ClusterHelp()
 }
 
 println " "
@@ -42,12 +42,16 @@ if ( params.profile ) {
 if (params.mode != 'simulation' && params.mode != 'real') {
     exit 1, "ERROR: choose between simulation or real data mode!"
 }
-if (params.mode == 'simulation' && params.sort_reads && params.mixture_fastqs=='') {
+
+if (params.mode == 'simulation' && params.prepare_mixture){
+  if(params.mixture_fastqs=='') {
     exit 1, "ERROR: Please input a folder of mix-in fastq samples!"
-}
-if (params.mode == 'simulation' && params.sort_reads && params.mixture_lineages=='') {
+  }
+  if ( params.mixture_lineages=='') {
     exit 1, "ERROR: Please input a csv file with lineage annotation for the input mix-in samples!"
+  }
 }
+
 if (params.mode == 'real' && params.fastq=='') {
   if (params.sort_reads){
     exit 1, "ERROR: Please input fastq file!"
@@ -58,7 +62,7 @@ if (params.sort_reads) {
 }
 
 log.info """\
-    ACWLA -- Amplicon-based Clustering of Wastewater Sequencing Data for SARS-CoV-2 Lineage Detection and Abundance Estimation
+    ABACADABRA  - Amplicon-Based Clustering Approach for for lineage Detection and ABundance estimation fRom wAstewater sequencing
     ==================================
     Analysis mode:          $params.mode
     Input Files:            
@@ -82,12 +86,10 @@ usher = Channel.fromPath(params.usher)
 include { fastq_to_fasta } from './modules/fastq_to_fasta'
 include { sort_sequences; primer_sort; read_filtering } from './modules/sortsequences'
 include { primer_clipping } from './modules/primer_clipping'
-include { remove_redundancy; add_redundancy } from './modules/remove_redundancy'
-include { create_lineage_dict } from './modules/create_dict'
+include { create_lineage_dict; create_mixtures } from './modules/create_sample'
 include { primerset_to_amplicon } from './modules/primerset_to_amplicon'
 include { hdbscan } from './modules/hdbscan'
-// include { reverseComp } from './modules/reverseComp'
-include { call_variants } from './modules/cluster_profiles'
+include { call_variants; plot_mutation_profiles } from './modules/cluster_profiles'
 include { update_reference; lineage_prediction; amplicon_quant; aggregate_abundances } from './modules/lineage_prediction'
 include { lineage_prediction as lineage_prediction_repeat; amplicon_quant as amplicon_quant_repeat; aggregate_abundances as aggregate_abundances_repeat } from './modules/lineage_prediction'
 
@@ -95,14 +97,24 @@ include { lineage_prediction as lineage_prediction_repeat; amplicon_quant as amp
 workflow prepare_mixture {
 
   main:
-    mixed_components = Channel.fromPath("$params.mixture_fastqs/*.fastq")
-    mixed_lineages = Channel.fromPath(params.mixture_lineages).splitCsv(header:false,skip:1)
+    mixed_components = Channel.fromPath(params.mixture_fastqs).splitCsv(header:false).map{ it -> tuple(file(it[0]), it[1]) } // [fastq, abundance]
+    mixed_lineages = Channel.fromPath(params.mixture_lineages).splitCsv(header:false,skip:1) // [samplename, lineage]
 
-    fastq_to_fasta(mixed_components)
-    mixed_components_fa = fastq_to_fasta.out.map{ it -> tuple(it.baseName, it) } // [barcode, fasta]
+    fastq_to_fasta(mixed_components.map{ it -> it[0] })
+    // [samplename, fasta]
+    component_fasta = fastq_to_fasta.out.map{ it -> tuple(it.baseName, it)}
+    // [samplename, abundance*sample size]
+    read_number = mixed_components.map{ it -> tuple(it[0].baseName, it[1]) }.combine(Channel.value(params.sample_size)).map{ it -> tuple(it[0], (it[1].toFloat()*it[2].toFloat()).round()) }
+
+    // input [samplename, fasta, n_reads]
+    create_mixtures(component_fasta.join(read_number))
+    mixed_components_fa = create_mixtures.out.component // [samplename, sub_fasta]
+    create_mixtures.out.log.collectFile(name:"mix_sample.log", storeDir:"$params.output/$params.runinfo/")
+    fasta = mixed_components_fa.map{ it -> it[1]}.collectFile(name:"query.fasta", storeDir:"$params.output/input")
+
     create_lineage_dict(mixed_components_fa.join(mixed_lineages))
-    lineageDict = create_lineage_dict.out.collectFile(keepHeader: true, name: "lineageDict.csv", storeDir:"$params.output/$params.mode/input")
-    fasta = fastq_to_fasta.out.collectFile(name:"query.fasta", storeDir:"$params.output/$params.mode/input")
+    lineageDict = create_lineage_dict.out.collectFile(keepHeader: true, name: "lineageDict.csv", storeDir:"$params.output/input")
+    
 
   emit:
     lineageDict
@@ -118,7 +130,7 @@ workflow get_amplicon_reads {
     primer_sort(fasta.combine(primer))
     primer_reads = primer_sort.out.primer_reads.flatten().map{ it -> tuple(it.name, it) } // [ primername, fasta ]
     read_filtering(primer_reads)
-    read_filtering.out.log.collectFile(storeDir: "$params.output/$params.mode/${params.runinfo}", name: "read_filtering.log")
+    read_filtering.out.log.collectFile(storeDir: "$params.output/${params.runinfo}", name: "read_filtering.log")
     filtered_primer_reads = read_filtering.out.filtered.filter{ it[1].countFasta() != 0 } 
 
     primer_clipping(filtered_primer_reads.combine(bed).combine(reference))
@@ -130,61 +142,33 @@ workflow get_amplicon_reads {
     right_primerclipped_sorted = sort_sequences.out
     primerclipped_redundant = left_primerclipped.concat(right_primerclipped_sorted)
 
-    remove_redundancy(primerclipped_redundant) 
-    // [primername, fasta]
-    nr_primersets = remove_redundancy.out.nr_fasta.map{ it -> tuple(it[0].split('_')[1], it[1]) }.groupTuple().map{ it.flatten() } // [amplicon, left.fasta, right.fasta]
-    amplicon_redundancy = remove_redundancy.out.redundancy.collectFile(storeDir: "$params.output/$params.mode/$params.amplicon_data/redundant"){ it -> ["${it.name}", it] }.map{ it -> tuple(it.baseName.split('-')[0], it) }
-    remove_redundancy.out.log.collectFile(storeDir: "$params.output/$params.mode/${params.runinfo}", name: "remove_redundancy.log")
-
-    nr_primersets_handle_borders = nr_primersets.map{it -> if (it.size()==2) [it[0], it[1], file(params.dummy)] else it}
-    primerset_to_amplicon(nr_primersets_handle_borders)
+    amplicon_primer_sets = primerclipped_redundant.map{ it -> tuple(it[0].split('_')[1], it[1]) }.groupTuple().map{ it.flatten() } // [amplicon, left.fasta, right.fasta]
+    primersets_handle_borders = amplicon_primer_sets.map{it -> if (it.size()==2) [it[0], it[1], file(params.dummy)] else it}
+    primerset_to_amplicon(primersets_handle_borders)
     amplicon_ch = primerset_to_amplicon.out    
             
 
   emit:
     amplicon_ch
-    amplicon_redundancy
 }
 
 workflow clustering {
   take:
     amplicon_fasta
     lineageDict
-    amplicon_redundancy
-    //primerDict
 
   main:
-    hdbscan(amplicon_fasta.combine(lineageDict)) // previously had primerDict as additional input
+    hdbscan(amplicon_fasta.combine(lineageDict))
     cluster_result = hdbscan.out.amplicon_cluster
-    hdbscan.out.log.collectFile(name: 'hdbscan.log', storeDir: "${params.output}/${params.mode}/${params.runinfo}")
+    hdbscan.out.log.collectFile(name: 'hdbscan.log', storeDir: "${params.output}/${params.runinfo}")
   
     // [amplicon, [cluster0.fasta,...clusterN.fasta], amplicon-duplicates.fasta]
-    cluster_result_extended = cluster_result.join(amplicon_redundancy)
-    add_redundancy(cluster_result_extended.transpose())
-    redundant_cluster_result = add_redundancy.out
-    //results_channel = Channel.value('HDBSCAN').combine(hdbscan.out.hdbscan_out)
-    // why is this still needed?
-    //reverseComp(results_channel)
-
+    redundant_cluster_result = cluster_result.transpose().map{ it -> tuple(it[0], it[1].baseName, it[1]) } // []
+  
   emit:
     //results_channel
     redundant_cluster_result
 }
-
-// workflow evaluation {
-//   take:
-//     cluster_fasta_files
-//     primerDict
-
-//   main:
-//     split_fasta_by_primer(cluster_fasta_files.combine(primerDict))
-//     split_fasta_by_primer.out.view()
-//     split_fasta_by_primer.out.combine(reference).view()
-//     call_variants(split_fasta_by_primer.out.combine(reference))
-//     call_variants.out.bam_path.groupTuple().view()
-//     call_variants.out.bam_path.groupTuple().map{ it -> it[1] }.first().flatten().unique().view()
-//     mutation_heatmap(call_variants.out.bam_path.groupTuple().map{ it -> it[1] }.first().flatten().unique())
-// }
 
 workflow prediction{
   take:
@@ -194,36 +178,39 @@ workflow prediction{
     // First, split cluster by primer?
     call_variants(cluster_fasta.combine(reference))
     // [amplicon, cluster, cluster.fasta, cluster.tsv]
-    allele_frequency_ch = call_variants.out.cluster_AF.filter{ it[3].baseName.contains("medaka") }
+    allele_frequency_ch = call_variants.out.cluster_AF.filter{ it[2].countFasta() > 0}
     // [amplicon, ampliconsize]
     amplicon_size = allele_frequency_ch.map{ it -> tuple(it[0], it[2].countFasta()) }.groupTuple().map{ it -> tuple(it[0], it[1].sum()) }
+    plot_mutation_profiles(amplicon_size)
+    amplicon_size_fwd = plot_mutation_profiles.out.fwd
     amplicon_cluster_map = allele_frequency_ch.map{ it -> tuple(it[0], it[1]) }.groupTuple() // [amplicon, [cluster1,...,clustern]]
     // [amplicon, cluster, ampliconsize]
-    amplicon_size_cluster_map = amplicon_cluster_map.join(amplicon_size).transpose()
-    amplicon_size.view()
-    sample_size = amplicon_size.map{ it -> it[1] }.sum() 
+    amplicon_size_cluster_map = amplicon_cluster_map.join(amplicon_size_fwd).transpose()
+    amplicon_size_fwd.view()
+    sample_size = amplicon_size_fwd.map{ it -> it[1] }.sum() 
     sample_size.view()
-    call_variants.out.log.collectFile(storeDir: "$params.output/${params.mode}/${params.runinfo}", name: "variant_call.log")
+    call_variants.out.log.collectFile(storeDir: "$params.output/${params.runinfo}", name: "variant_call.log")
+    
     
     //[amplicon, cluster, clustersize/ampliconsize, cluster.tsv]
     prediction_input = amplicon_size_cluster_map.join(allele_frequency_ch, by: [0,1]).map{ it -> tuple(it[0], it[1], it[3].countFasta()/it[2], it[4]) }
     prediction_input.view()
   
     // [amplicon, ampliconsize/samplesize]
-    amplicon_scaler = amplicon_size.combine(sample_size).map{ it -> tuple(it[0], it[1]/it[2]) } 
+    amplicon_scaler = amplicon_size_fwd.combine(sample_size).map{ it -> tuple(it[0], it[1]/it[2]) } 
     amplicon_scaler.view()
 
     update_reference(usher)
     new_usher = update_reference.out
 
     lineage_prediction(prediction_input.combine(new_usher))
-    lineage_prediction.out.log.collectFile(name:'quantify_cluster_abundances.log', storeDir:"$params.output/${params.mode}/${params.runinfo}")
+    lineage_prediction.out.log.collectFile(name:'quantify_cluster_abundances.log', storeDir:"$params.output/${params.runinfo}")
     amplicon_cluster_abundances = lineage_prediction.out.abs // [amplicon, cluster, tsv]
     amplicon_ready = amplicon_cluster_abundances.map{ it -> tuple(it[0], it[2]) }.groupTuple().map{ it ->  it[0]} // [amplicon] 
 
     amplicon_quant(amplicon_ready.join(amplicon_scaler)) // input [amplicon, ampliconsize/samplesize]
     amplicon_abundances = amplicon_quant.out.abs // [amplicon, tsv]
-    amplicon_quant.out.log.collectFile(name:'quantify_amplicon_abundances.log', storeDir:"$params.output/${params.mode}/${params.runinfo}")
+    amplicon_quant.out.log.collectFile(name:'quantify_amplicon_abundances.log', storeDir:"$params.output/${params.runinfo}")
 
     sample_abundances = amplicon_abundances.map{ it -> it[1] }.collectFile(keepHeader: true, skip: 1, name:"scaled_amplicon_abundances.tsv") // [tsv]
 
@@ -233,21 +220,20 @@ workflow prediction{
       final_output = aggregate_abundances.out.abs.collect() // [tsv]    
     }
     else{
-      aggregate_abundances.out.fp_log.collectFile(name:"false_positive_detection.log", storeDir:"$params.output/${params.mode}/${params.runinfo}")
+      aggregate_abundances.out.fp_log.collectFile(name:"false_positive_detection.log", storeDir:"$params.output/${params.runinfo}")
       lineage_prediction_repeat(prediction_input.combine(fp_update))
-      lineage_prediction_repeat.out.log.collectFile(name:'quantify_cluster_abundances.log', storeDir:"$params.output/${params.mode}/${params.runinfo}")
+      lineage_prediction_repeat.out.log.collectFile(name:'quantify_cluster_abundances.log', storeDir:"$params.output/${params.runinfo}")
       amplicon_cluster_abundances_repeat = lineage_prediction_repeat.out.abs // [amplicon, cluster, tsv]
       amplicon_ready_repeat = amplicon_cluster_abundances_repeat.map{ it -> tuple(it[0], it[2]) }.groupTuple().map{ it ->  it[0]} // [amplicon] 
 
       amplicon_quant_repeat(amplicon_ready_repeat.join(amplicon_scaler)) // input [amplicon, ampliconsize/samplesize]
       amplicon_abundances_repeat = amplicon_quant_repeat.out.abs // [amplicon, tsv]
-      amplicon_quant_repeat.out.log.collectFile(name:'quantify_amplicon_abundances.log', storeDir:"$params.output/${params.mode}/${params.runinfo}")
+      amplicon_quant_repeat.out.log.collectFile(name:'quantify_amplicon_abundances.log', storeDir:"$params.output/${params.runinfo}")
 
       sample_abundances_repeat = amplicon_abundances_repeat.map{ it -> it[1] }.collectFile(keepHeader: true, skip: 1, name:"scaled_amplicon_abundances.tsv") // [tsv]
 
       aggregate_abundances_repeat(sample_abundances_repeat, fp_update, Channel.value(0))
       final_output = aggregate_abundances_repeat.out.abs.collect() // [tsv]
-      // final_log_repeat = aggregate_abundances_repeat.out.log.collectFile(name:'sample_abundances.log', storeDir:"$params.output/${params.runinfo}")
     }
 
   emit:
@@ -264,8 +250,8 @@ workflow {
       fasta = prepare_mixture.out.fasta
     }
     else {
-      lineageDict = Channel.fromPath("$params.output/$params.mode/input/lineageDict.csv")
-      fasta = Channel.fromPath("$params.output/$params.mode/input/query.fasta")
+      lineageDict = Channel.fromPath("$params.output/input/lineageDict.csv")
+      fasta = Channel.fromPath("$params.output/input/query.fasta")
     }
     lineageDict.view()
     fasta.view()
@@ -287,20 +273,17 @@ workflow {
   if (params.sort_reads) {
     get_amplicon_reads(fasta)
     amplicon_fasta = get_amplicon_reads.out.amplicon_ch 
-    amplicon_redundancy = get_amplicon_reads.out.amplicon_redundancy
   }
   else {
-    amplicon_ch = Channel.fromPath("$params.output/$params.mode/$params.amplicon_data/final/*.fasta")
-    amplicon_redundancy_ch = Channel.fromPath("$params.output/$params.mode/$params.amplicon_data/redundant/*.fasta")
+    amplicon_ch = Channel.fromPath("$params.output/$params.amplicon_data/final/*.fasta")
     // [amplicon, amplicon.fasta]
     amplicon_fasta = amplicon_ch.map{ it -> tuple(it.baseName, it) }
     // [amplicon, amplicon-duplicates.fasta]
-    amplicon_redundancy = amplicon_redundancy_ch.map{ it -> tuple(it.baseName.split('-')[0], it) }
   }
 
-  clustering(amplicon_fasta, lineageDict, amplicon_redundancy) //previously: primerdict included
+  clustering(amplicon_fasta, lineageDict) 
   cluster_fasta = clustering.out.redundant_cluster_result // [amplicon,clusterX, clusterX.fasta]
-  //evaluation(clustering.out.cluster_result, get_amplicon_reads.out.primerDict) 
+  cluster_fasta.view()
   
   prediction(cluster_fasta)
   abundances = prediction.out.final_output
@@ -313,7 +296,11 @@ workflow.onComplete {
     println "Execution status: ${ workflow.success ? 'OK' : 'failed' }"
 }  
 
-//  TODO
+
+
+
+
+
 def helpMSG() {
     c_reset = "\033[0m";
     c_red = "\033[1;31m"
@@ -322,44 +309,62 @@ def helpMSG() {
     c_blue = "\033[0;34m";
     c_dim = "\033[2m";
     log.info """
-    ____________________________________________________________________________________________
+   ______________________________________________________________________________________________________________________________________________________
 
-    ${c_green}Welcome to ACWLA - your pipeline to estimate SARS-CoV-2 lineage abundances from wastewater sequencing data !${c_reset}
-    ____________________________________________________________________________________________
-
+    ${c_green}Welcome to ABRACADABRA - Amplicon-Based Clustering Approach for for lineage Detection and ABundance estimation fRom wAstewater sequencing${c_reset}
+    ______________________________________________________________________________________________________________________________________________________
     ${c_yellow}Usage example:${c_reset}
     If you need to analyse a fastq sample from wastewater sequencing:
     nextflow run main.nf --fastq FASTQ --bed BED --primer TSV 
 
-    If you need to create an equally mixed sample from a number of fastq files. Assuming that
-    every fastq sample contains sequencing reads from only one lineage.
-    nextflow run main.nf --mode simulation --prepare_mixture --mixture_fastqs PATH/TO/FASTQS --mixture_lineages CSV
+    If you already sorted your data into amplicon sets, run:
+    nextflow run main.nf --sort_reads false
+    Make sure, that amplicon fasta fiels are located at params.output/params.amplicon_data/final
+   
 
-    ____________________________________________________________________________________________
+
+    If you need to create a mixed sample from a number of fastq files: 
+    (Assuming that every fastq sample contains sequencing reads from only one lineage)
+    nextflow run main.nf --mode simulation --prepare_mixture --mixture_fastqs CSV --mixture_lineages CSV --bed BED --primer TSV 
+
+    If you want to analyse your recently mixed sample where the reads were already sorted into amplicons, run the following command.
+    Make sure that the amplicon fasta files are located in params.output//params.amplucon_data/final and that the input mixed fasta sample
+    and lineageDict.csv are located at params.output/input. 
+    nextflow run main.nf --mode simulation --sort_reads false
+    ______________________________________________________________________________________________________________________________________________________
 
     ${c_yellow}Mandatory Input:${c_reset}
-    ${c_green}--fastq FILEPATH${c_reset}                  Path to fastq file containing wastewater seq reads
-    ${c_green}--mixture_fastqs PATH${c_reset}             Path to folder containing single-lineage fastq files
+    ${c_green}--fastq FILEPATH${c_reset}                  Path to fastq file containing wastewater seq reads (fastq)
+    ${c_green}--mixture_fastqs PATH${c_reset}             Path to csv file containing the filepaths to component fastq files and the target abundances.
+                                      (csv comma-separated)
     ${c_green}--mixture_lineages FILEPATH${c_reset}       Path to csv file mapping fastq file names to their lineage annotation
-                                                          (csv is comma-separated)
-    ${c_green}--primer${c_reset}
-    ${c_green}--bed${c_reset}
+                                      (csv is comma-separated)
+    ${c_green}--primer${c_reset}                          Primer sequence file (tsv)
+    ${c_green}--bed${c_reset}                             Primer scheme (bed)
 
     ${c_yellow}Other Input:${c_reset}
-    ${c_green}--reference${c_reset}
-    ${c_green}--usher${c_reset}
+    ${c_green}--reference${c_reset}                       SC2 index genome (fasta)      
+    ${c_green}--usher${c_reset}                           Mutational barcode file (csv)
 
     ${c_yellow}Pipeline Options:${c_reset}
-    ${c_green}--mode${c_reset}                            TODO: After clustering, calculate basic statistics of clustering results. For each
-                                      tool, the minimum, maximum, average and median cluster sizes are calculated,
-                                      as well as the average distance of two representative genomes.
-    ${c_green}--sort_reads${c_reset}
-    ${c_green}--prepare_mixture${c_reset}
-    ${c_green}--threshold${c_reset}
-    ${c_green}--min_read_len${c_reset}
-    ${c_green}--hdbscan_params${c_reset}                  Additional parameters for UMAP and HDBscan cluster analysis. [default $params.hdbscan_params]
-                                      For more information and options, please use
-                                      ${c_green}nextflow run viralclust.nf --hdbscan_help${c_reset}.
+    ${c_green}--mode${c_reset}                            In simulation mode, you can mix a sample from input fastq files at defined abundances and 
+                                      annotate sampled reads with lineage labels for evaluation or load already prepared mixture samples with lineageDict.csv.
+                                      (boolean)
+    ${c_green}--sort_reads${c_reset}                      If true, input read data is sorted into amplicon fasta files. Else, the pipeline tries to load already sorted 
+                                      data from params.output/params.amplicon_data/final. (boolean)
+    ${c_green}--prepare_mixture${c_reset}                 Mix input fastq samples at predefined abundances (boolean)
+    ${c_green}--unknown${c_reset}                         If true, the pipeline uses called SNPs that don't overlap with the barcode reference to detect an "unknown" lineage.
+    ${c_green}--variant_caller${c_reset}                  Currently, only ivar is supported (string)
+    ${c_green}--threshold${c_reset}                       Minimal abundance cutoff. If there are lineages predicted with abundances below the threshold, lineage detection
+                                      and abundance estimation is repeated whtout the respective lienages in the reference. (float)
+    ${c_green}--min_read_len${c_reset}                    Minimum read length allowed when filtering sorted amplicon read sets. (int)
+    ${c_green}--max_primer_mismatch${c_reset}             Maximum number of nt mismatches allowed between a primer and a read durint amplicon sorting. (int)
+    ${c_green}--sample_size${c_reset}                     Target sample size when simulating a mixture. Number of reads per component is calculated 
+                                      from the defiend abudnance and the sample size (int)
+    ${c_green}--umap_params${c_reset}                     Additional parameters for UMAP. [default $params.umap_params]
+    ${c_green}--hdbscan_params${c_reset}                  Additional parameters for HDBSCAN cluster analysis. [default $params.hdbscan_params]
+                                      For more information and options for hdbscan and umap, please use
+                                      ${c_green}nextflow run main.nf --ClusterHelp${c_reset}.
     
     ${c_yellow}Other Options:${c_reset}
     ${c_green}--cores INT${c_reset}                       max cores per process for local use [default $params.cores]
@@ -373,7 +378,7 @@ def helpMSG() {
     """.stripIndent()
 }
 
-def hdbscanHelp() {
+def ClusterHelp() {
   c_reset = "\033[0m";
   c_red = "\033[1;31m"
   c_green = "\033[1;32m";
@@ -382,64 +387,65 @@ def hdbscanHelp() {
   c_dim = "\033[2m";
   log.info """
   ____________________________________________________________________________________________
-  This python program is part of ViralClust and takes several genome sequences
-  from different viruses as an input.
-  These will be UMAPped based on their kmer frequency representation and then clustered 
-  into groups (clades) based on their sequence similarity. For each clade, the centroid sequence is
-  determined as representative genome, i.e. the sequence with the lowest
-  distance to all other sequences of this clade.
+  This python program was part of ViralClust (@kevin.lamkiewicz@uni-jena.de)
+  The input reads will be UMAPped based on their kmer frequency representation and then clustered 
+  into groups (clades) based on their sequence similarity.
   ____________________________________________________________________________________________
   Python Dependencies:
     docopt
     BioPython
-    colorlog
     numpy
     scipy
     umap-learn
     hdbscan
 
-  Contact:
-    kevin.lamkiewicz@uni-jena.de
-
   Usage:
-    hdbscan_virus.py [options] <inputSequences> <lineageDict> <primerDict>
+    hdbscan_virus.py [options] <inputSequences> <lineageDict>
 
   Options:
     -h, --help                              Show this help message and exits.
-    -v, --verbose                           Get some extra information from viralClust during calculation. [Default: False]
-    --version                               Prints the version of viralClust and exits.
-
-    -o DIR, --output DIR                    Specifies the output directory of viralClust. [Default: pwd]
+    -v, --verbose                           Get some extra information during calculation. [Default: False]
+    -o DIR, --output DIR                    Specifies the output directory [Default: pwd]
     -p PROCESSES, --process PROCESSES       Specify the number of CPU cores that are used. [Default: 1]
 
 
+
     -k KMER, --kmer KMER                    Length of the considered kmer. [Default: 7]
-    --metric METRIC                         Distance metric applied by UMAP (if applied) and HDBSCAN.
+    --umap_metric                           Distance metric applied by  UMAP.
                                             The following are supported:
                                             'euclidean', 'manhatten', 'chebyshev', 'minkwoski',
                                             'canberra', 'braycurtis',
                                             'mahalanobis', 'wminkowski', 'seuclidean',
                                             'cosine'.
-                                            If an invalid metric is set, ViralClust will default back to 
-                                            the cosine distance.
+                                            If an invalid metric is set, the default is selected.
                                             [Default: cosine]
-    --neighbors NEIGHBORS                   Number of neighbors considered by UMAP to reduce the dimension space.
+    --n_neighbors                           Number of neighbors considered by UMAP to reduce the dimension space.
                                             Low numbers here mean focus on local structures within the data, whereas 
                                             larger numbers may loose fine details. [default: 15]
-    --dThreshold dTHRESHOLD                 Sets the threshold for the minimum distance of two points in the low-dimensional space.
+    --min_dist                              Sets the threshold for the minimum distance of two points in the low-dimensional space.
                                             Smaller thresholds are recommended for clustering and identifying finer topological structures
                                             in the data. [Default: 0.1]
-    --dimension DIMENSION                   UMAP tries to find an embedding for the input data that can be represented by a low-dimensional space.
+    --n_components                          UMAP tries to find an embedding for the input data that can be represented by a low-dimensional space.
                                             This parameter tells UMAP how many dimensions should be used for the embedding. Lower numbers may result 
                                             in loss of information, whereas larger numbers will increase the runtime. [Default: 10]
 
-    --clusterSize CLUSTERSIZE               This parameter forces HDBSCAN to form cluster with a size larger-equal to CLUSTERSIZE.
+
+
+    --hdbscan_metric METRIC                 Distance metric applied by  HDBSCAN.
+                                            The following are supported:
+                                            'euclidean', 'manhatten', 'chebyshev', 'minkwoski',
+                                            'canberra', 'braycurtis',
+                                            'mahalanobis', 'wminkowski', 'seuclidean',
+                                            'cosine'.
+                                            If an invalid metric is set, the default will be selected
+                                            [Default: cosine]
+    --min_cluster_size                      This parameter forces HDBSCAN to form cluster with a size larger-equal to CLUSTERSIZE.
                                             Be aware that some data points (i.e. genomes) or even whole subcluster are considered as noise, if this parameter is set too high.
                                             E.g., if a very distinct viral genus has 40 genomes and the parameter is set to anything >40, HDBSCAN will not form
                                             the genus specific cluster. [Default: 5]
-    --minSample MINSAMPLE                   Intuitively, this parameter declares how conservative clustering is performed. Higher values will lead 
+    --min_samples                           Intuitively, this parameter declares how conservative clustering is performed. Higher values will lead 
                                             to more points considered noise, whereas a low value causes "edge-cases" to be grouped into a cluster.
                                             The default parameter is the same as CLUSTERSIZE. [Default: CLUSTERSIZE]
-    --clusterThreshold CLUSTERTHRESHOLD     A distance threshold. Clusters below this value will be merged. [Default: 0.0]
+    --cluster_selection_epsilon             A distance threshold. Clusters below this value will be merged. [Default: 0.0]
   """.stripIndent()
 }

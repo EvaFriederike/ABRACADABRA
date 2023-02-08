@@ -9,8 +9,8 @@ Notes:
 
 process hdbscan {
   label 'hdbscan'
-  publishDir "${params.output}/${params.mode}/${params.eval_output}/${amplicon_id}", mode: 'copy', pattern: '*.png'
-  publishDir "${params.output}/${params.mode}/${params.hdbscan_output}/${amplicon_id}", mode: 'copy', pattern: 'cluster*.fasta'
+  publishDir "${params.output}/${params.eval_output}/${amplicon_id}", mode: 'copy', pattern: '*.png'
+  publishDir "${params.output}/${params.hdbscan_output}/${amplicon_id}", mode: 'copy', pattern: 'cluster*.fasta'
 
 
   input:
@@ -26,17 +26,19 @@ process hdbscan {
     """
       #!/bin/bash
 
-      touch dummy.json 
       echo "------------------- Amplicon ${amplicon_id} -------------------"
+      echo \$PWD
 
-      python3 ${baseDir}/bin/hdbscan_virus.py -v -p $task.cpus $params.hdbscan_params ${amplicon_id}.fasta $lineageDict dummy.json 2> hdbscan.log
+      python3 ${baseDir}/bin/hdbscan_virus.py -v -p $task.cpus $params.umap_params $params.hdbscan_params ${amplicon_id}.fasta $lineageDict 2> hdbscan.log
       cat hdbscan.log >> .command.log
       
-      if [ -f cluster*.fasta ]; then
+      if [ -f cluster-1.fasta  ]; then
         touch cluster-1.fasta
-        mv cluster-1.fasta  "${amplicon_id}_hdbscan_UNCLUSTERED.fasta"  
-      else
-        echo "No read clusters will be included into lineage detection (due to only noise or too few reads in the cluster)"
+        mv cluster-1.fasta  "${amplicon_id}_hdbscan_UNCLUSTERED.fasta" 
+      fi 
+
+      if [ ! -f cluster0.fasta ]; then
+        echo "Only noise detected"
       fi
       
 

@@ -10,12 +10,10 @@ import numpy as np
 tsv = sys.argv[1]
 T = float(sys.argv[2])
 ref = sys.argv[3]
-output = sys.argv[4]
+unknown = sys.argv[4]
 
 usher = pd.read_csv(ref, sep=',', index_col=0)
 df = pd.read_csv(tsv, sep='\t', index_col=0)
-print("usher")
-print(usher.head())
 
 relabs = []
 lines = []
@@ -30,6 +28,7 @@ final_abundances = final_abundances.transpose()
 final_abundances.columns = ['relative abundance']
 fps = final_abundances.loc[final_abundances["relative abundance"]<T].index.values
 if len(fps) > 0:
+    output = "unfiltered_sample_abundances.tsv"
     # update reference for false positives
     if 'unknown' in fps:
         fps = fps[fps!='unknown']
@@ -40,9 +39,10 @@ if len(fps) > 0:
         for l in fps:
             f.write(f"{l}\n")
 else:
+    output = "final_sample_abundances.tsv"
     print(f"The final lineage abundances sum to {round(final_abundances.sum().item()*100,2)}% ")
 
-if final_abundances.loc['unknown','relative abundance'] < T:
+if unknown == 'true' and final_abundances.loc['unknown','relative abundance'] < T:
     final_abundances.drop(index='unknown', inplace=True)
 
 final_abundances.to_csv(output, sep='\t')

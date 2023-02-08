@@ -1,4 +1,4 @@
-# NOTES:
+q# NOTES:
 # * adjusted for analysing reads mapped to the spike gene
 # * lofreq options are outdated
 
@@ -15,18 +15,15 @@ if(length(new.packages)) install.packages(new.packages)
 lapply(list.of.packages, require, character.only = TRUE)
 
 
-
-#options <- list(
-#  make_option()
-#)
+# INPUT:
+# 1. path to folder
+# 2. pattern to cath vcf files in folder
 
 # options 
 args <- commandArgs(TRUE) 
-cat("variant caller:\t", args[1], "\n", sep="")
-cat("input files:\t", args[2], "/", args[3], "\n", sep="")
+cat("input files:\t", args[1], "/", args[2], "\n", sep="")
 
-type <- args[1]
-outfile <- args[4]
+outfile <- args[3]
 POS_lower <- 21563                  ## adjust the variant frequency
 POS_upper <- 25384                  
 percent <- F                        ## should variants be shown as percent?
@@ -41,8 +38,8 @@ clustering <- F                     ## should the samples be clustered?
 files<-list.files(path = args[2], pattern = args[3], recursive = F, full.names = TRUE)
 print(files)
 ## create data.frame for first dataset
-if (type == 'lofreq'){
-  variants<-read.table(files[1], header = F, col.names=c('CHROM','POS','ID','REF','ALT','QUAL','FILTER','INFO'), sep = "\t")
+if (type == 'ivar'){
+  variants<-read.table(files[1], header = F, col.names=c('REGION','POS','REF','ALT', 'REF_DP','REF_RV','REF_QUAL','ALT_DP','ALT_RV','ALT_QUAL','ALT_FREQ','TOTAL_DP','PVAL','PASS','GFF_FEATURE','REF_CODON','REF_AA','ALT_CODON','ALT_AA'), sep = "\t")
   AF <- variants$INFO %>% strsplit(';') %>% sapply("[", 2)
   AF <- AF %>% strsplit('=') %>% sapply("[", 2)
   variants$AF <- AF

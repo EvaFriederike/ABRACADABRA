@@ -2,20 +2,20 @@ name: hdbscan
 channels:
   - conda-forge
   - bioconda
+  - defaults
 dependencies:
-  - python>=3.7
-  - numpy<=1.21
-  - colorlog>=4.1.0
-  - biopython>=1.76
-  - umap-learn>=0.4.4
-  - hdbscan>=0.8.28
-  - joblib==1.1.0
-  - docopt>=0.6.2
-  - scipy<=1.4.1
-  - pandas
-  - matplotlib
-  - datashader
+  - python=3.8.15
+  - numpy=1.21.0
+  - biopython=1.80
+  - umap-learn=0.5.3
+  - hdbscan=0.8.29
+  - joblib=1.1.0
+  - docopt=0.6.2
+  - scipy=1.4.1
+  - pandas=1.5.2
+  - matplotlib=3.3.2
+  - datashader=0.5.4
   - bokeh=2.4.3
   - holoviews=1.15.1
-  - colorcet
-  - scikit-image
+  - colorcet=3.0.1
+  - scikit-image=0.19.3
