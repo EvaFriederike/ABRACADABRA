@@ -80,3 +80,73 @@ process primer_sort {
         
   """
 }
+
+/**************************************
+Strategy might result in some reads being sorted into 1-3 amplicons,
+depending on the range of overlap -> check the amount of concerned reads
+Also, seqkit grep detected primer matches that regex finditer didn't...?
+*******************************************/
+process primer_sort_edit {
+  label 'sortseq'
+  
+  input:
+    tuple path(fasta), val(amplicon), val(primer1), val(primer2)
+
+  output:
+    tuple val(amplicon), path("${amplicon}.fasta"), emit: primer_reads
+    path ".command.log", emit: log
+    
+  script:
+  """
+    #!/bin/bash
+    echo "-------------------Amplicon $amplicon-------------------------------"
+    echo $primer1 > primer.tsv
+    echo $primer2 >> primer.tsv
+
+    seqkit grep -m $params.max_primer_mismatch -f primer.tsv $fasta > matches.fasta
+    echo "Primers are matching with \$(grep -c '>' matches.fasta) reads"
+    python3 ${projectDir}/bin/split_reads.py matches.fasta $primer1 $primer2 $params.max_primer_mismatch
+
+    mv split_reads.fasta ${amplicon}.fasta
+       
+  """
+}
+
+process log_primer_sort {
+  label 'sortseq'
+
+  input:
+    tuple path(ampliconfasta), path(infasta)
+
+  output:
+    path ".command.log"
+
+  script:
+  """
+    #!/bin/bash
+    echo "____________________________________________________"
+    echo "\$(grep -c '>' $ampliconfasta) of \$(grep -c '>' $infasta) reads were sorted into amplicon sets."
+       
+  """
+}
+
+
+
+process redirect_reads {
+  label 'sortseq'
+  
+  input:
+    path fasta
+
+  output:
+    path "dedup_positive_${fasta}"
+    
+  script:
+  """
+    #!/bin/bash
+    echo "Sorting input reads into positive strand direction"
+    python3 ${projectDir}/bin/sort_sequences.py $fasta > positive_${fasta}
+    seqkit rmdup -n -o dedup_positive_${fasta} positive_${fasta}
+    echo "After removing duplicates by header, \$(grep -c '>' positive_${fasta}) of\$(grep -c '>' $fasta) reads remain."
+  """
+}

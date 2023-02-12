@@ -81,16 +81,17 @@ if (params.sort_reads) {
 }
 reference = Channel.fromPath(params.reference)
 usher = Channel.fromPath(params.usher)
+// TODO: implement check for input usher datafream: colsum != 0 for all mutations?!
 
 
 include { fastq_to_fasta } from './modules/fastq_to_fasta'
-include { sort_sequences; primer_sort; read_filtering } from './modules/sortsequences'
+include { sort_sequences; primer_sort; primer_sort_edit ; read_filtering; redirect_reads; log_primer_sort } from './modules/sortsequences'
 include { primer_clipping } from './modules/primer_clipping'
 include { create_lineage_dict; create_mixtures } from './modules/create_sample'
 include { primerset_to_amplicon } from './modules/primerset_to_amplicon'
 include { hdbscan } from './modules/hdbscan'
-include { call_variants; plot_mutation_profiles } from './modules/cluster_profiles'
-include { update_reference; lineage_prediction; amplicon_quant; aggregate_abundances } from './modules/lineage_prediction'
+include { update_reference; call_variants; filter_variants; filter_variants_repeat; variant_metrics; variant_metrics as variant_metrics_repeat; plot_mutation_profiles; plot_mutation_profiles as plot_mutation_profiles_repeat } from './modules/cluster_profiles'
+include { lineage_prediction; amplicon_quant; aggregate_abundances } from './modules/lineage_prediction'
 include { lineage_prediction as lineage_prediction_repeat; amplicon_quant as amplicon_quant_repeat; aggregate_abundances as aggregate_abundances_repeat } from './modules/lineage_prediction'
 
 
@@ -127,26 +128,35 @@ workflow get_amplicon_reads {
     fasta
   
   main:
-    primer_sort(fasta.combine(primer))
-    primer_reads = primer_sort.out.primer_reads.flatten().map{ it -> tuple(it.name, it) } // [ primername, fasta ]
+    redirect_reads(fasta)
+    positive_fasta = redirect_reads.out
+    amplicon_primers = primer.splitCsv(header: false, skip:1, sep:'\t').map{ it -> tuple(it[0].split('_')[1], it[2]) }.groupTuple().map{ it -> it.flatten()} // [amplicon, primer_L, primer_R]
+    primer_sort_edit(positive_fasta.combine(amplicon_primers))
+    log1 = primer_sort_edit.out.log
+    primer_reads = primer_sort_edit.out.primer_reads
+    log_primer_sort(primer_reads.map{ it -> it[1]}.collectFile(name:'sorted.fasta').combine(positive_fasta))
+    log2 = log_primer_sort.out
+    log1.collect().concat(log2).collectFile(name:"primer_sort.log", storeDir: "${params.output}/${params.runinfo}/")
+    // primer_sort(fasta.combine(primer))
+    // primer_reads = primer_sort.out.primer_reads.flatten().map{ it -> tuple(it.name, it) } // [ primername, fasta ]
     read_filtering(primer_reads)
     read_filtering.out.log.collectFile(storeDir: "$params.output/${params.runinfo}", name: "read_filtering.log")
     filtered_primer_reads = read_filtering.out.filtered.filter{ it[1].countFasta() != 0 } 
 
     primer_clipping(filtered_primer_reads.combine(bed).combine(reference))
-    primer_clipped_ch = primer_clipping.out.primerclipped_fasta
-    right_primerclipped = primer_clipped_ch.filter{ it[0] ==~ /.*RIGHT.fasta/ }
-    left_primerclipped = primer_clipped_ch.filter{ it[0] ==~ /.*LEFT.fasta/ }
+    // primer_clipped_ch = primer_clipping.out.primerclipped_fasta
+    // right_primerclipped = primer_clipped_ch.filter{ it[0] ==~ /.*RIGHT.fasta/ }
+    // left_primerclipped = primer_clipped_ch.filter{ it[0] ==~ /.*LEFT.fasta/ }
     
-    sort_sequences(right_primerclipped)
-    right_primerclipped_sorted = sort_sequences.out
-    primerclipped_redundant = left_primerclipped.concat(right_primerclipped_sorted)
+    // sort_sequences(right_primerclipped)
+    // right_primerclipped_sorted = sort_sequences.out
+    // primerclipped_redundant = left_primerclipped.concat(right_primerclipped_sorted)
 
-    amplicon_primer_sets = primerclipped_redundant.map{ it -> tuple(it[0].split('_')[1], it[1]) }.groupTuple().map{ it.flatten() } // [amplicon, left.fasta, right.fasta]
-    primersets_handle_borders = amplicon_primer_sets.map{it -> if (it.size()==2) [it[0], it[1], file(params.dummy)] else it}
-    primerset_to_amplicon(primersets_handle_borders)
-    amplicon_ch = primerset_to_amplicon.out    
-            
+    // amplicon_primer_sets = primerclipped_redundant.map{ it -> tuple(it[0].split('_')[1], it[1]) }.groupTuple().map{ it.flatten() } // [amplicon, left.fasta, right.fasta]
+    // primersets_handle_borders = amplicon_primer_sets.map{it -> if (it.size()==2) [it[0], it[1], file(params.dummy)] else it}
+    // primerset_to_amplicon(primersets_handle_borders)
+    // amplicon_ch = primerset_to_amplicon.out    
+    amplicon_ch = primer_clipping.out.primerclipped_fasta    
 
   emit:
     amplicon_ch
@@ -163,7 +173,7 @@ workflow clustering {
     hdbscan.out.log.collectFile(name: 'hdbscan.log', storeDir: "${params.output}/${params.runinfo}")
   
     // [amplicon, [cluster0.fasta,...clusterN.fasta], amplicon-duplicates.fasta]
-    redundant_cluster_result = cluster_result.transpose().map{ it -> tuple(it[0], it[1].baseName, it[1]) } // []
+    redundant_cluster_result = cluster_result.transpose().map{ it -> tuple(it[0], it[1].baseName, it[1]) }
   
   emit:
     //results_channel
@@ -173,37 +183,42 @@ workflow clustering {
 workflow prediction{
   take:
     cluster_fasta // [amplicon, cluster, cluster.fasta]
+    lineageDict
 
   main:
     // First, split cluster by primer?
     call_variants(cluster_fasta.combine(reference))
-    // [amplicon, cluster, cluster.fasta, cluster.tsv]
-    allele_frequency_ch = call_variants.out.cluster_AF.filter{ it[2].countFasta() > 0}
-    // [amplicon, ampliconsize]
-    amplicon_size = allele_frequency_ch.map{ it -> tuple(it[0], it[2].countFasta()) }.groupTuple().map{ it -> tuple(it[0], it[1].sum()) }
-    plot_mutation_profiles(amplicon_size)
-    amplicon_size_fwd = plot_mutation_profiles.out.fwd
-    amplicon_cluster_map = allele_frequency_ch.map{ it -> tuple(it[0], it[1]) }.groupTuple() // [amplicon, [cluster1,...,clustern]]
-    // [amplicon, cluster, ampliconsize]
-    amplicon_size_cluster_map = amplicon_cluster_map.join(amplicon_size_fwd).transpose()
-    amplicon_size_fwd.view()
-    sample_size = amplicon_size_fwd.map{ it -> it[1] }.sum() 
-    sample_size.view()
     call_variants.out.log.collectFile(storeDir: "$params.output/${params.runinfo}", name: "variant_call.log")
-    
-    
-    //[amplicon, cluster, clustersize/ampliconsize, cluster.tsv]
-    prediction_input = amplicon_size_cluster_map.join(allele_frequency_ch, by: [0,1]).map{ it -> tuple(it[0], it[1], it[3].countFasta()/it[2], it[4]) }
-    prediction_input.view()
-  
-    // [amplicon, ampliconsize/samplesize]
-    amplicon_scaler = amplicon_size_fwd.combine(sample_size).map{ it -> tuple(it[0], it[1]/it[2]) } 
-    amplicon_scaler.view()
-
+    // [amplicon, cluster, cluster.fasta, cluster.tsv]
+    allele_frequency_ch = call_variants.out.cluster_AF.filter{ it[2].countFasta() > 0 }
     update_reference(usher)
     new_usher = update_reference.out
+    filter_variants(allele_frequency_ch.combine(new_usher).combine(reference).combine(Channel.value(params.unknown)))
+    filter_variants.out.log.collectFile(name:"filter_variants.log", storeDir: "$params.output/${params.runinfo}")
+    filtered_variant_ch = filter_variants.out.filtered.filter{ it[2].countFasta() > 0 }
+    //sample_variants = allele_frequency_ch.map{ it -> it[3]}.collectFile(name: "sample_variants.tsv", keepHeader:true, skip: 1)
+    sample_variants =  filtered_variant_ch.map{ it -> it[3]}.collectFile(name: "sample_variants.tsv", keepHeader:true, skip: 1)
+    variant_metrics(sample_variants.combine(new_usher).combine(lineageDict))
+    variant_metrics.out.collectFile(name:"variant_evaluation.log", storeDir: "$params.output/${params.runinfo}")
+    // [amplicon, ampliconsize]
+    amplicon_size = filtered_variant_ch.map{ it -> tuple(it[0], it[2].countFasta()) }.groupTuple().map{ it -> tuple(it[0], it[1].sum()) }
+    plot_mutation_profiles(amplicon_size)
+    amplicon_size_fwd = plot_mutation_profiles.out.fwd
+    amplicon_cluster_map = filtered_variant_ch.map{ it -> tuple(it[0], it[1]) }.groupTuple() // [amplicon, [cluster1,...,clustern]]
+    // [amplicon, cluster, ampliconsize]
+    amplicon_size_cluster_map = amplicon_cluster_map.join(amplicon_size_fwd).transpose()
+   
+    sample_size = amplicon_size_fwd.map{ it -> it[1] }.sum() 
+    
+    //[amplicon, cluster, clustersize/ampliconsize, cluster.tsv]
+    prediction_input = amplicon_size_cluster_map.join(filtered_variant_ch, by: [0,1]).map{ it -> tuple(it[0], it[1], it[3].countFasta()/it[2], it[4]) }
+    // amplicon_size_cluster_map.join(filtered_variant_ch, by: [0,1]).map{ it -> tuple(it[0], it[1], it[3].countFasta(), it[2], it[3].countFasta()/it[2]) }.view()
+    // [amplicon, ampliconsize/samplesize]
+    amplicon_scaler = amplicon_size_fwd.combine(sample_size).map{ it -> tuple(it[0], it[1]/it[2]) } 
+    // amplicon_size.combine(sample_size).join(amplicon_scaler).view()
 
     lineage_prediction(prediction_input.combine(new_usher))
+    // new_usher = lineage_prediction.out.mod_usher
     lineage_prediction.out.log.collectFile(name:'quantify_cluster_abundances.log', storeDir:"$params.output/${params.runinfo}")
     amplicon_cluster_abundances = lineage_prediction.out.abs // [amplicon, cluster, tsv]
     amplicon_ready = amplicon_cluster_abundances.map{ it -> tuple(it[0], it[2]) }.groupTuple().map{ it ->  it[0]} // [amplicon] 
@@ -221,17 +236,47 @@ workflow prediction{
     }
     else{
       aggregate_abundances.out.fp_log.collectFile(name:"false_positive_detection.log", storeDir:"$params.output/${params.runinfo}")
-      lineage_prediction_repeat(prediction_input.combine(fp_update))
-      lineage_prediction_repeat.out.log.collectFile(name:'quantify_cluster_abundances.log', storeDir:"$params.output/${params.runinfo}")
+
+      // filter variants and reads using false positive annotated usher frame and the filtered variant output from before
+      filter_variants_repeat(filtered_variant_ch.join(allele_frequency_ch, by: [0,1]).map{ it -> tuple(it[0], it[1], it[2], it[3], it[6]) }.combine(fp_update).combine(reference).combine(Channel.value(params.unknown)))
+      // mod_new_usher = filter_variants_repeat.out.new_usher_mod
+      filter_variants_repeat.out.log.collectFile(name:"filter_variants_repeat.log", storeDir: "$params.output/${params.runinfo}")
+      // update downstream variant evaluation and scaling factors
+      filtered_variant_repeat_ch = filter_variants_repeat.out.filtered.filter{ it[2].countFasta() > 0 }
+      sample_variants_repeat =  filtered_variant_repeat_ch.map{ it -> it[3]}.collectFile(name: "sample_variants.tsv", keepHeader:true, skip: 1)
+      variant_metrics_repeat(sample_variants_repeat.combine(fp_update).combine(lineageDict))
+      variant_metrics_repeat.out.collectFile(name:"variant_evaluation_repeat.log", storeDir: "$params.output/${params.runinfo}")
+      // [amplicon, ampliconsize]
+      amplicon_size_repeat = filtered_variant_repeat_ch.map{ it -> tuple(it[0], it[2].countFasta()) }.groupTuple().map{ it -> tuple(it[0], it[1].sum()) }
+      plot_mutation_profiles_repeat(amplicon_size_repeat)
+      amplicon_size_fwd_repeat = plot_mutation_profiles_repeat.out.fwd
+      amplicon_cluster_map_repeat = filtered_variant_repeat_ch.map{ it -> tuple(it[0], it[1]) }.groupTuple() // [amplicon, [cluster1,...,clustern]]
+      // [amplicon, cluster, ampliconsize]
+      amplicon_size_cluster_map_repeat = amplicon_cluster_map_repeat.join(amplicon_size_fwd_repeat).transpose()
+    
+      sample_size_repeat = amplicon_size_fwd_repeat.map{ it -> it[1] }.sum() 
+      
+      //[amplicon, cluster, clustersize/ampliconsize, cluster.tsv]
+      prediction_input_repeat = amplicon_size_cluster_map_repeat.join(filtered_variant_repeat_ch, by: [0,1]).map{ it -> tuple(it[0], it[1], it[3].countFasta()/it[2], it[4]) }
+      // amplicon_size_cluster_map_repeat.join(filtered_variant_repeat_ch, by: [0,1]).map{ it -> tuple(it[0], it[1], it[3].countFasta(), it[2], it[3].countFasta()/it[2]) }.view()
+      // [amplicon, ampliconsize/samplesize]
+      amplicon_scaler_repeat = amplicon_size_fwd_repeat.combine(sample_size_repeat).map{ it -> tuple(it[0], it[1]/it[2]) } 
+      // amplicon_size_repeat.combine(sample_size_repeat).join(amplicon_scaler_repeat).view()
+
+      // analyse clusters with updated data
+      lineage_prediction_repeat(prediction_input_repeat.combine(fp_update))
+      lineage_prediction_repeat.out.log.collectFile(name:'quantify_cluster_abundances_repeat.log', storeDir:"$params.output/${params.runinfo}")
+
+      // analyse amplicons
       amplicon_cluster_abundances_repeat = lineage_prediction_repeat.out.abs // [amplicon, cluster, tsv]
       amplicon_ready_repeat = amplicon_cluster_abundances_repeat.map{ it -> tuple(it[0], it[2]) }.groupTuple().map{ it ->  it[0]} // [amplicon] 
 
-      amplicon_quant_repeat(amplicon_ready_repeat.join(amplicon_scaler)) // input [amplicon, ampliconsize/samplesize]
+      amplicon_quant_repeat(amplicon_ready_repeat.join(amplicon_scaler_repeat)) // input [amplicon, ampliconsize/samplesize]
       amplicon_abundances_repeat = amplicon_quant_repeat.out.abs // [amplicon, tsv]
-      amplicon_quant_repeat.out.log.collectFile(name:'quantify_amplicon_abundances.log', storeDir:"$params.output/${params.runinfo}")
+      amplicon_quant_repeat.out.log.collectFile(name:'quantify_amplicon_abundances_repeat.log', storeDir:"$params.output/${params.runinfo}")
 
+      // aggregate
       sample_abundances_repeat = amplicon_abundances_repeat.map{ it -> it[1] }.collectFile(keepHeader: true, skip: 1, name:"scaled_amplicon_abundances.tsv") // [tsv]
-
       aggregate_abundances_repeat(sample_abundances_repeat, fp_update, Channel.value(0))
       final_output = aggregate_abundances_repeat.out.abs.collect() // [tsv]
     }
@@ -280,14 +325,12 @@ workflow {
     amplicon_fasta = amplicon_ch.map{ it -> tuple(it.baseName, it) }
     // [amplicon, amplicon-duplicates.fasta]
   }
-
+  amplicon_fasta.view()
   clustering(amplicon_fasta, lineageDict) 
   cluster_fasta = clustering.out.redundant_cluster_result // [amplicon,clusterX, clusterX.fasta]
-  cluster_fasta.view()
   
-  prediction(cluster_fasta)
+  prediction(cluster_fasta, lineageDict)
   abundances = prediction.out.final_output
-  abundances.view()
 
 }  
 

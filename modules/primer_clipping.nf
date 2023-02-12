@@ -5,6 +5,7 @@ Clip primers from input reads.
 process primer_clipping {
   label 'medaka'
   publishDir "${params.output}/${params.amplicon_data}/primerclipped", mode: 'copy', pattern: "${primer_name}.sorted.primerclipped.fasta"
+  publishDir "${params.output}/${params.amplicon_data}/final", mode: 'copy', pattern: "${primer_name}.sorted.primerclipped.fasta", saveAs: {filename -> "${primer_name}.fasta"}
 
   input:
     tuple val(primer_name), path(primer_reads), path(bed), path (reference)

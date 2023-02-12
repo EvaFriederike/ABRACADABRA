@@ -29,7 +29,7 @@ process hdbscan {
       echo "------------------- Amplicon ${amplicon_id} -------------------"
       echo \$PWD
 
-      python3 ${baseDir}/bin/hdbscan_virus.py -v -p $task.cpus $params.umap_params $params.hdbscan_params ${amplicon_id}.fasta $lineageDict 2> hdbscan.log
+      python3 ${baseDir}/bin/hdbscan_virus.py -v -p $task.cpus $params.umap_params $params.hdbscan_params $amplicon_fasta $lineageDict 2> hdbscan.log
       cat hdbscan.log >> .command.log
       
       if [ -f cluster-1.fasta  ]; then

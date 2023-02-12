@@ -152,7 +152,7 @@ class Clusterer(object):
     Clusterer.dim = len(fastaContent)
     Clusterer.matrix = np.zeros(shape=(Clusterer.dim, Clusterer.dim), dtype=float)
     # for hdbscan, the data set size has to be larger or equal to min_samples
-    if len(fastaContent) < 2:
+    if len(fastaContent) < 21:
       return 1
     return fastaContent
 
