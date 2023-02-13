@@ -39,14 +39,17 @@ process read_filtering {
     """
     #!/bin/bash
 
-    echo "--------------Filter ${name} for very short reads"
+    echo "-------------- ${name} -------------------"
+    echo "Filter for very short reads"
+
     seqkit seq -m $params.min_read_len $fasta > filtered_${fasta}
     B=\$(grep -c '>' $fasta)
     A=\$(grep -c '>' filtered_${fasta})
-    echo "Number of reads before filtering: \$B"
-    echo "Number of reads after filtering: \$A"
+    
     if [ \$A -eq 0 ]; then
       echo "No remaining reads after filtering."
+    else
+      echo "Keeping \$A of \$B reads"
     fi
     """
 }

@@ -153,8 +153,7 @@ process filter_variants {
     echo "------------------- Amplicon ${amplicon} - ${cluster} -------------------"
     echo \$PWD
     
-    echo "filter variants for SNPs only and potential false positives"
-    echo "Before filtering: \$(wc -l $tsv | cut -d' ' -f1) variants"
+    echo "Filter variants: keep SNPs only and remove potential false positives"
     samtools index $bam
     python $projectDir/bin/filter_variants.py $tsv $usher $unknown $bam $reference
 
@@ -166,18 +165,15 @@ process filter_variants {
       rm filtered_${tsv}
       touch fail.tsv
       echo "--------------------------------------------------------"
-      echo "No variants remaining for ${cluster} after filtering"
+      echo "No variants remaining after filtering"
       n_reads=\$(grep -c '>' $fasta)
-      echo "This leads to missing information from \${n_reads} reads and reduces the overall relative abundances of detected lineages in the analysed sample!!"
+      echo "This leads to missing information from \${n_reads} reads!!"
       touch empty_$fasta
     elif [ -f filtered-reads.txt ]; then
-      seqkit grep -v -f filtered-reads.txt $fasta -o filtered_$fasta
-      echo "Remaining variants for ${cluster}: \$(wc -l filtered_${tsv} | cut -d' ' -f1)"
-      echo "Removing \$(wc -l filtered-reads.txt | cut -d' ' -f1) reads that contained only variants that were filtered out"
+      seqkit grep -f filtered-reads.txt $fasta -o filtered_$fasta
+      echo "Keeping \$(wc -l filtered-reads.txt | cut -d' ' -f1) of \$(wc -l obsolete/$tsv | cut -d' ' -f1) reads"
     else
-      echo "Remaining variants for ${cluster}: \$(wc -l filtered_${tsv} | cut -d' ' -f1)"
-      echo "No reads were filtered"
-      cp $fasta out_$fasta
+      echo "WARNING: Why is there no list of selected reads?"
     fi     
     """
 }
@@ -203,8 +199,7 @@ process filter_variants_repeat {
     echo "------------------- Amplicon ${amplicon} - ${cluster} -------------------"
     echo \$PWD
 
-    echo "filter variants of false positive lineages"
-    echo "Before filtering: \$(wc -l $tsv | cut -d' ' -f1) variants"
+    echo "Filter variants: remove variants that were associated with false positive lineages only"
     samtools index $bam
     python $projectDir/bin/filter_variants_repeat.py $tsv $usher $unknown $bam $reference
     
@@ -215,19 +210,15 @@ process filter_variants_repeat {
     if [[ \$VAR -le 1 ]]; then
       rm filtered_${tsv}
       touch fail.tsv
-      echo "--------------------------------------------------------"
       echo "No variants remaining for ${cluster} after filtering"
       n_reads=\$(grep -c '>' $fasta)
-      echo "This leads to missing information from \${n_reads} reads and reduces the overall relative abundances of detected lineages in the analysed sample!!"
+      echo "This leads to missing information from \${n_reads} reads!!"
       touch empty_$fasta
     elif [ -f filtered-reads.txt ]; then
-      seqkit grep -v -f filtered-reads.txt $fasta -o filtered_$fasta
-      echo "Remaining variants for ${cluster}: \$(wc -l filtered_${tsv} | cut -d' ' -f1)"
-      echo "Removing \$(wc -l filtered-reads.txt | cut -d' ' -f1) reads that contained only variants that were filtered out"
+      seqkit grep -f filtered-reads.txt $fasta -o filtered_$fasta
+      echo "Keeping \$(wc -l filtered-reads.txt | cut -d' ' -f1) of \$(wc -l obsolete/$tsv | cut -d' ' -f1) reads"
     else
-      echo "Remaining variants for ${cluster}: \$(wc -l filtered_${tsv} | cut -d' ' -f1)"
-      echo "No reads were filtered"
-      cp $fasta out_$fasta
+      echo "WARNING: Why is there no list of selected reads?"
     fi     
     """
 }
@@ -270,7 +261,8 @@ process plot_mutation_profiles {
   script:
   """
   #!/bin/bash
-  python3 ${projectDir}/bin/mutationprofile.py ${launchDir}/${params.output}/${params.hdbscan_output}/variants/${amplicon} $amplicon
+  #python3 ${projectDir}/bin/mutationprofile.py ${launchDir}/${params.output}/${params.hdbscan_output}/variants/${amplicon} $amplicon
+  python3 ${projectDir}/bin/mutationprofile.py ${params.output}/${params.hdbscan_output}/variants/${amplicon} $amplicon
 
   """
 

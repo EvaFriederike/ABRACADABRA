@@ -21,5 +21,6 @@ with open('variant_evaluation.log','w') as f:
     f.write(f"Proportion of known called variants: {known_vars}\n")
     f.write(f"Proportion of unknown called variants: {unknown_vars}\n")
     if unknown_vars != 0:
+        f.write(f"unknown vars:\n")
         for v in [x for x in var_df["VAR"] if x not in TP]:
-            f.write(f"unknown var {v}")
+            f.write(f"\t{v}\n")

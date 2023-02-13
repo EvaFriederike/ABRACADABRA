@@ -85,7 +85,7 @@ usher = Channel.fromPath(params.usher)
 
 
 include { fastq_to_fasta } from './modules/fastq_to_fasta'
-include { sort_sequences; primer_sort; primer_sort_edit ; read_filtering; redirect_reads; log_primer_sort } from './modules/sortsequences'
+include { sort_sequences; primer_sort_edit ; read_filtering; redirect_reads; log_primer_sort } from './modules/sortsequences'
 include { primer_clipping } from './modules/primer_clipping'
 include { create_lineage_dict; create_mixtures } from './modules/create_sample'
 include { primerset_to_amplicon } from './modules/primerset_to_amplicon'

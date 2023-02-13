@@ -53,12 +53,15 @@ process amplicon_quant {
     echo "------------------- Amplicon ${amplicon} -------------------"
     echo "\$PWD"
     echo "Sum lineage abundances across all clusters"
-    python ${baseDir}/bin/aggregate_cluster.py ${launchDir}/${params.output}/tmp/${amplicon}/ ${amplicon}_abundances.tsv
+    
+    #python ${baseDir}/bin/aggregate_cluster.py ${launchDir}/${params.output}/tmp/${amplicon}/ ${amplicon}_abundances.tsv
+    python ${baseDir}/bin/aggregate_cluster.py ${params.output}/tmp/${amplicon}/ ${amplicon}_abundances.tsv
 
     echo "Scaling for proportion of amplicon reads among all sample reads"
     python ${baseDir}/bin/scale_abundances.py ${amplicon}_abundances.tsv $amplicon_scaler scaled_${amplicon}_abundances.tsv
 
-    rm -rf ${launchDir}/${params.output}/tmp/${amplicon}/
+    #rm -rf ${launchDir}/${params.output}/tmp/${amplicon}/
+    rm -rf ${params.output}/tmp/${amplicon}/
     """
 
 }
@@ -95,8 +98,8 @@ process aggregate_abundances {
 
     python ${baseDir}/bin/aggregate_sample.py $tsv $threshold $usher $params.unknown
     
-    rm -rf  ${launchDir}/${params.output}/tmp/
-
+    #rm -rf  ${launchDir}/${params.output}/tmp/
+    rm -rf  ${params.output}/tmp/
     """
 
 }
