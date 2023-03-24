@@ -106,7 +106,7 @@ process call_variants {
     echo "------------------- Amplicon ${amplicon} - ${cluster} -------------------"
     echo \$PWD
 
-    minimap2 -ax map-ont $reference $fasta -t $task.cpus > ${cluster}.sam
+    minimap2 -ax $params.minimap_params $reference $fasta -t $task.cpus > ${cluster}.sam
     samtools view -S -b -h ${cluster}.sam > ${cluster}.bam
     samtools sort ${cluster}.bam > ${cluster}.sorted.bam
     samtools index -c ${cluster}.sorted.bam  
@@ -178,9 +178,7 @@ process filter_variants {
     """
 }
 
-/*****************************************************
-TODO: add af histogram plot for known and unknown mutations?
-***************************************************/
+
 process filter_variants_repeat {
   label 'medaka'
   
@@ -244,9 +242,6 @@ process variant_metrics {
 }
 
 
-/*
-NOTE: remove launchdir when running on hpc
-*/
 process plot_mutation_profiles {
   label 'sortseq'
   publishDir "${params.output}/${params.eval_output}/${amplicon}", mode: 'copy', pattern: "*.png"

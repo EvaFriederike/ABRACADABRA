@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# Author: Kevin Lamkiewicz
-# Email: kevin.lamkiewicz@uni-jena.de
+
+# Source: https://github.com/klamkiew/viralclust/commit/3203e6de334c6834877dbdffecff70df07ed80d7
+# "Clustering of viral genomes based on different algorithms and metrices"
+# (Author: kevin.lamkiewicz@uni-jena.de)
 
 
 import sys

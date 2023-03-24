@@ -6,8 +6,7 @@ import re
 
 version="0.0.1"
 
-# Author: https://gitlab.com/rekm in the project https://gitlab.com/RKIBioinformaticsPipelines/ncov_minipipe
-# small adaptions from https://gitlab.com/MarieLataretu
+# Source: https://github.com/rki-mf1/CoVpipe2  (commit hash: 8a70e9c769c4c69a12eb87d49ec8b214694b0543)
 
 def main():
     parser = get_argparser()

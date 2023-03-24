@@ -1,5 +1,5 @@
 /************************************************************************
-Create dictoinary mapping read names to lineage annotation.
+Create dictionary mapping read names to lineage annotation.
 Used later on to evaluate clustering.
 ************************************************************************/
 

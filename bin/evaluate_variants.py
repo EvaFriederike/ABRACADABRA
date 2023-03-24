@@ -5,13 +5,14 @@ import pandas as pd
 
 var_df = pd.read_csv(sys.argv[1], sep='\t')
 usher = pd.read_csv(sys.argv[2], index_col=0)
-sample = pd.read_csv(sys.argv[3])
+if sys.argv[3] != "dummy":
+    sample = pd.read_csv(sys.argv[3])
+    lineages = sample.lineage.unique()
+    usher = usher.loc[lineages,:]
 
 var_df['VAR'] = var_df['REF']+var_df['POS'].astype(str)+var_df['ALT']
 var_df.drop_duplicates('VAR', inplace=True)
-lineages = sample.lineage.unique()
-usher_sub = usher.loc[lineages,:]
-usher_sub = usher_sub[usher_sub["FP"]==0]
+usher_sub = usher[usher["FP"]==0]
 
 TP = [col for col in var_df.VAR if col in usher_sub.columns.values]
 known_vars = len(TP)/float(len(var_df))

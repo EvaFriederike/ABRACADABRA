@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# Author: Kevin Lamkiewicz
-# Email: kevin.lamkiewicz@uni-jena.de
+# Source: https://github.com/klamkiew/viralclust/commit/3203e6de334c6834877dbdffecff70df07ed80d7
+# "Clustering of viral genomes based on different algorithms and metrices"
+# (Author: kevin.lamkiewicz@uni-jena.de)
 
 """
 Usage:
@@ -21,7 +22,7 @@ Options:
   --hdbscan_metric HDBSCAN_METRIC                       [Default: cosine] 
   --min_samples MIN_SAMPLES                          [Default: 5] 
   --min_cluster_size MIN_CLUSTER_SIZE                      [Default: 5]  
-  --cluster_selection_epsilon CLUSTER_SELECTION_EPSILON             [Default: 0.2] 
+  --cluster_selection_epsilon CLUSTER_SELECTION_EPSILON             [Default: 0.05] 
 
 """
 
@@ -51,6 +52,8 @@ import scipy
 import random
 import umap.umap_ as umap
 import umap.plot
+import matplotlib
+matplotlib.use("Agg") # use non-interactive backend to not generate figure windows when already being disconnected from the computing server
 import matplotlib.pyplot as plt
 import hdbscan
 from sklearn.preprocessing import normalize
@@ -208,20 +211,6 @@ class Clusterer(object):
     # print(f"Number of profiles, number of lineage assignments: {len(Clusterer.d_profiles)}, {len(Clusterer.header2lineage)}")
 
 
-  def calc_pd(self, seqs):
-    """
-    """
-    for element in seqs:
-      try:
-        stuff = (element[0], element[1])
-      except TypeError:
-        return None
-    seq1, profile1 = seqs[0]
-    seq2, profile2 = seqs[1]
-    dFunction = Clusterer.scipyDistances[self.metric]
-    distance = dFunction(profile1, profile2)
-    return (seq1, seq2, distance)
-
 
   def apply_umap(self):
     """
@@ -285,11 +274,11 @@ class Clusterer(object):
         outStream.write("\n")
         print(f"Cluster {i}:\t{np.array(cluster_profiles).shape[0]} reads")
         cluster_profile_mean = np.mean(np.array(cluster_profiles), axis=0)
-        fig, ax = plt.subplots(figsize=(12,5))
-        ax.hist(cluster_profile_mean)
+        plt.subplots(figsize=(12,5))
+        plt.hist(cluster_profile_mean)
         plt.title(f'Mean Kmer Histogram Cluster {i}', fontsize=13)
         plt.savefig(f'mean-histogram_cluster_{i}.png')
-        plt.close()
+        #plt.close()
 
     # # Plot clustering result in UMAP space
     # fig, ax =plt.subplots()
@@ -298,22 +287,22 @@ class Clusterer(object):
     # ax.set_title('Normalized UMAP embedding of input reads (colored by HDBSCAN cluster)')
     # plt.savefig('normalized_umap_clusterplot.png')
     # plt.close()
-    fig, ax = plt.subplots()
-    ax = umap.plot.points(visual_embedding, labels=self.clusterlabel)
-    ax.set_title(f'UMAP embedding colored by HDBSCAN cluster')
+    plt.subplots()
+    umap.plot.points(visual_embedding, labels=self.clusterlabel)
+    plt.title(f'UMAP embedding colored by HDBSCAN cluster')
     plt.savefig('umap_clusterplot.png')
-    plt.close()
+    #plt.close()
     if 'dummy' not in self.lineageDict:
       #print(f"Size of UMAP clusterable data, visual data, and number of lineage labels:, {len(clusterable_embedding)}, {len(visual_embedding.embedding_)}, {len(Clusterer.header2lineage.values())}")
       ars = adjusted_rand_score(np.array(list(Clusterer.header2lineage.values())), self.clusterlabel)
       mi = adjusted_mutual_info_score(np.array(list(Clusterer.header2lineage.values())), self.clusterlabel)
       print(f"Adjusted rand score: {ars}\nAdjusted mutual information: {mi}")
       # Plot UMAPped reads with lineage assignment
-      fig, ax = plt.subplots()
-      ax = umap.plot.points(visual_embedding, labels=np.array(list(Clusterer.header2lineage.values())))
-      ax.set_title('UMAP embedding of input reads (colored by lineage assignment)')
+      plt.subplots()
+      umap.plot.points(visual_embedding, labels=np.array(list(Clusterer.header2lineage.values())))
+      plt.title('UMAP embedding of input reads (colored by lineage assignment)')
       plt.savefig('umap_lineageplot.png')
-      plt.close()
+      #plt.close()
 
 
 

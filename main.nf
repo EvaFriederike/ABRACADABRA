@@ -62,15 +62,25 @@ if (params.sort_reads) {
 }
 
 log.info """\
-    ABACADABRA  - Amplicon-Based Clustering Approach for for lineage Detection and ABundance estimation fRom wAstewater sequencing
+    ABRACADABRA  - Amplicon-Based hieRArchical Clustering Approach for lineage Detection and ABundance estimation fRom wAstewater sequencing
     ==================================
-    Analysis mode:          $params.mode
-    Input Files:            
-    Output path:            $params.output
-    CPUs used:              $params.cores
-    ${sw -> if (params.hdbscan_params != '') sw << "HDBSCAN parameters:     ${params.hdbscan_params}"}
-    Read length filter:     $params.min_read_len nt
-    False positive abundance cutoff:  $params.threshold
+    Analysis mode:      $params.mode
+    ${sw -> if (params.mode == 'simulation') sw << "Input mixtures:     ${params.mixture_fastqs}"}
+    ${sw -> if (params.mode == 'real') sw << "Input Fastq:      ${params.fastq}"}
+    Primer scheme:      $params.primer
+    BED file:     $params.bed
+    UShER file:     $params.usher
+    Read length filter:                  $params.min_read_len nt
+    Primer mismatches:      $params.max_primer_mismatch
+    UMAP params:      $params.umap_params
+    HDBSCAN params:     $params.hdbscan_params
+    Minimap2 mode:      $params.minimap_params
+    False positive abundance cutoff:     $params.threshold
+  
+    
+    CPUs used:      $params.cores
+    Output path:      $params.output
+    Runinfo:      $params.runinfo
     """
     .stripIndent()
 
@@ -130,7 +140,7 @@ workflow get_amplicon_reads {
   main:
     redirect_reads(fasta)
     positive_fasta = redirect_reads.out
-    amplicon_primers = primer.splitCsv(header: false, skip:1, sep:'\t').map{ it -> tuple(it[0].split('_')[1], it[2]) }.groupTuple().map{ it -> it.flatten()} // [amplicon, primer_L, primer_R]
+    amplicon_primers = primer.splitCsv(header: false, skip:1, sep:'\t').map{ it -> tuple(it[0].split('_')[1], it[1]) }.groupTuple().map{ it -> it.flatten()} // [amplicon, primer_L, primer_R]
     primer_sort_edit(positive_fasta.combine(amplicon_primers))
     log1 = primer_sort_edit.out.log
     primer_reads = primer_sort_edit.out.primer_reads
@@ -352,62 +362,62 @@ def helpMSG() {
     c_blue = "\033[0;34m";
     c_dim = "\033[2m";
     log.info """
-   ______________________________________________________________________________________________________________________________________________________
+    
+    ${c_green}Welcome to ABRACADABRA - Amplicon-Based hieRArchical Clustering Approach for for lineage Detection and ABundance estimation fRom wAstewater sequencing${c_reset}
 
-    ${c_green}Welcome to ABRACADABRA - Amplicon-Based Clustering Approach for for lineage Detection and ABundance estimation fRom wAstewater sequencing${c_reset}
     ______________________________________________________________________________________________________________________________________________________
+   
     ${c_yellow}Usage example:${c_reset}
-    If you need to analyse a fastq sample from wastewater sequencing:
-    nextflow run main.nf --fastq FASTQ --bed BED --primer TSV 
+    If you want to analyse a fastq sample from wastewater sequencing:
+  
+      nextflow run main.nf --fastq FASTQ --bed BED --primer TSV
 
     If you already sorted your data into amplicon sets, run:
-    nextflow run main.nf --sort_reads false
-    Make sure, that amplicon fasta fiels are located at params.output/params.amplicon_data/final
+      nextflow run main.nf --sort_reads false
+    (Make sure, that amplicon fasta files are located at params.output/params.amplicon_data/final)
    
-
-
     If you need to create a mixed sample from a number of fastq files: 
+      nextflow run main.nf --mode simulation --prepare_mixture --mixture_fastqs CSV --mixture_lineages CSV --bed BED --primer TSV 
     (Assuming that every fastq sample contains sequencing reads from only one lineage)
-    nextflow run main.nf --mode simulation --prepare_mixture --mixture_fastqs CSV --mixture_lineages CSV --bed BED --primer TSV 
 
     If you want to analyse your recently mixed sample where the reads were already sorted into amplicons, run the following command.
-    Make sure that the amplicon fasta files are located in params.output//params.amplucon_data/final and that the input mixed fasta sample
-    and lineageDict.csv are located at params.output/input. 
-    nextflow run main.nf --mode simulation --sort_reads false
+      nextflow run main.nf --mode simulation --sort_reads false
+    (Make sure that the amplicon fasta files are located in params.output//params.amplicon_data/final and that the input mixed fasta sample
+    and lineageDict.csv are located at params.output/input)
     ______________________________________________________________________________________________________________________________________________________
 
     ${c_yellow}Mandatory Input:${c_reset}
-    ${c_green}--fastq FILEPATH${c_reset}                  Path to fastq file containing wastewater seq reads (fastq)
-    ${c_green}--mixture_fastqs PATH${c_reset}             Path to csv file containing the filepaths to component fastq files and the target abundances.
-                                      (csv comma-separated)
-    ${c_green}--mixture_lineages FILEPATH${c_reset}       Path to csv file mapping fastq file names to their lineage annotation
-                                      (csv is comma-separated)
-    ${c_green}--primer${c_reset}                          Primer sequence file (tsv)
-    ${c_green}--bed${c_reset}                             Primer scheme (bed)
+    ${c_green}--fastq FILEPATH${c_reset}                  Path to FASTQ file
+    ${c_green}--mixture_fastqs PATH${c_reset}             Path to comma-separated CSV file containing the filepaths to FASTQ files with reads to spike-in and the target abundances.
+    ${c_green}--mixture_lineages FILEPATH${c_reset}       Path to comma-separated CSV file mapping FASTQ file names to their lineage annotation (ONE lineage per FASTQ)
+    ${c_green}--primer${c_reset}                          Primer sequence file: TSV with two columns -> primer name and primer sequence
+    ${c_green}--bed${c_reset}                             Primer scheme (BED)
 
     ${c_yellow}Other Input:${c_reset}
-    ${c_green}--reference${c_reset}                       SC2 index genome (fasta)      
-    ${c_green}--usher${c_reset}                           Mutational barcode file (csv)
+    ${c_green}--reference${c_reset}                       SC2 index genome (FASTA)   
+    ${c_green}--usher${c_reset}                           Mutational barcode file (CSV)
 
     ${c_yellow}Pipeline Options:${c_reset}
     ${c_green}--mode${c_reset}                            In simulation mode, you can mix a sample from input fastq files at defined abundances and 
-                                      annotate sampled reads with lineage labels for evaluation or load already prepared mixture samples with lineageDict.csv.
-                                      (boolean)
+                                      annotate sampled reads with lineage labels for evaluation or load already prepared mixture samples with lineageDict.csv
+                                      (STRING)
+                                                          Use the "real" mode for samples where you do not have lineage annotations on the read level
+                                                          [default $params.mode]
     ${c_green}--sort_reads${c_reset}                      If true, input read data is sorted into amplicon fasta files. Else, the pipeline tries to load already sorted 
-                                      data from params.output/params.amplicon_data/final. (boolean)
-    ${c_green}--prepare_mixture${c_reset}                 Mix input fastq samples at predefined abundances (boolean)
-    ${c_green}--unknown${c_reset}                         If true, the pipeline uses called SNPs that don't overlap with the barcode reference to detect an "unknown" lineage.
-    ${c_green}--variant_caller${c_reset}                  Currently, only ivar is supported (string)
-    ${c_green}--threshold${c_reset}                       Minimal abundance cutoff. If there are lineages predicted with abundances below the threshold, lineage detection
-                                      and abundance estimation is repeated whtout the respective lienages in the reference. (float)
-    ${c_green}--min_read_len${c_reset}                    Minimum read length allowed when filtering sorted amplicon read sets. (int)
-    ${c_green}--max_primer_mismatch${c_reset}             Maximum number of nt mismatches allowed between a primer and a read durint amplicon sorting. (int)
+                                      data from params.output/params.amplicon_data/final (BOOLEAN) [default $params.sort_reads]
+    ${c_green}--prepare_mixture${c_reset}                 Mix input fastq samples at predefined abundances (BOOLEAN) [default $params.prepare_mixture]
     ${c_green}--sample_size${c_reset}                     Target sample size when simulating a mixture. Number of reads per component is calculated 
-                                      from the defiend abudnance and the sample size (int)
-    ${c_green}--umap_params${c_reset}                     Additional parameters for UMAP. [default $params.umap_params]
-    ${c_green}--hdbscan_params${c_reset}                  Additional parameters for HDBSCAN cluster analysis. [default $params.hdbscan_params]
+                                      from the defiend abudnance and the sample size (INT) [default $params.sample_size]
+    ${c_green}--unknown${c_reset}                         If true, the pipeline uses called SNPs that don't overlap with the barcode reference to detect an "unknown" lineage (BOOLEAN) [default $params.unknown]
+    ${c_green}--variant_caller${c_reset}                  Currently, only ivar is supported (STRING)
+    ${c_green}--threshold${c_reset}                       Minimal abundance cutoff. If there are lineages predicted with abundances below the threshold, lineage detection
+                                      and abundance estimation is repeated without the respective lienages in the reference (FLOAT) [default $params.threshold]
+    ${c_green}--min_read_len${c_reset}                    Minimum read length allowed when filtering sorted amplicon read sets (INT) [default $params.min_read_len]
+    ${c_green}--max_primer_mismatch${c_reset}             Maximum number of nt mismatches allowed between a primer and a read durint amplicon sorting (INT) [default $params.max_primer_mismatch]
+    ${c_green}--umap_params${c_reset}                     Additional parameters for UMAP [default $params.umap_params]
+    ${c_green}--hdbscan_params${c_reset}                  Additional parameters for HDBSCAN cluster analysis [default $params.hdbscan_params]
                                       For more information and options for hdbscan and umap, please use
-                                      ${c_green}nextflow run main.nf --ClusterHelp${c_reset}.
+                                      ${c_green}nextflow run main.nf --ClusterHelp${c_reset}
     
     ${c_yellow}Other Options:${c_reset}
     ${c_green}--cores INT${c_reset}                       max cores per process for local use [default $params.cores]
@@ -430,51 +440,45 @@ def ClusterHelp() {
   c_dim = "\033[2m";
   log.info """
   ____________________________________________________________________________________________
-  This python program was part of ViralClust (@kevin.lamkiewicz@uni-jena.de)
-  The input reads will be UMAPped based on their kmer frequency representation and then clustered 
-  into groups (clades) based on their sequence similarity.
+  The input reads are UMAPped based on their kmer frequency representation and then clustered 
+  into groups (clades) based on their sequence similarity using HDBSCAN.
   ____________________________________________________________________________________________
   Python Dependencies:
-    docopt
-    BioPython
-    numpy
-    scipy
-    umap-learn
-    hdbscan
+    - python=3.8.15
+    - numpy=1.21.0
+    - biopython=1.80
+    - umap-learn=0.5.3
+    - hdbscan=0.8.29
+    - joblib=1.1.0
+    - docopt=0.6.2
+    - scipy=1.4.1
+    - pandas=1.5.2
+    - matplotlib=3.3.2
+    - datashader>=0.5.4
+    - bokeh=2.4.3
+    - holoviews=1.15.1
+    - colorcet=3.0.1
+    - scikit-image=0.19.3
 
   Usage:
     hdbscan_virus.py [options] <inputSequences> <lineageDict>
 
   Options:
     -h, --help                              Show this help message and exits.
-    -v, --verbose                           Get some extra information during calculation. [Default: False]
-    -o DIR, --output DIR                    Specifies the output directory [Default: pwd]
+    -v, --verbose                           Get some extra information from viralClust during calculation. [Default: False]
+    -o DIR, --output DIR                    Specifies the output directory of viralClust. [Default: pwd]
     -p PROCESSES, --process PROCESSES       Specify the number of CPU cores that are used. [Default: 1]
-
-
-
-    -k KMER, --kmer KMER                    Length of the considered kmer. [Default: 7]
-    --umap_metric                           Distance metric applied by  UMAP.
-                                            The following are supported:
+    -k KMER, --kmer KMER                    Length of the considered kmer. [Default: 5]
+    --umap_metric UMAP_METRIC               Distance metric applied by  UMAP. The following are supported:
                                             'euclidean', 'manhatten', 'chebyshev', 'minkwoski',
                                             'canberra', 'braycurtis',
                                             'mahalanobis', 'wminkowski', 'seuclidean',
                                             'cosine'.
-                                            If an invalid metric is set, the default is selected.
-                                            [Default: cosine]
-    --n_neighbors                           Number of neighbors considered by UMAP to reduce the dimension space.
-                                            Low numbers here mean focus on local structures within the data, whereas 
-                                            larger numbers may loose fine details. [default: 15]
-    --min_dist                              Sets the threshold for the minimum distance of two points in the low-dimensional space.
-                                            Smaller thresholds are recommended for clustering and identifying finer topological structures
-                                            in the data. [Default: 0.1]
-    --n_components                          UMAP tries to find an embedding for the input data that can be represented by a low-dimensional space.
-                                            This parameter tells UMAP how many dimensions should be used for the embedding. Lower numbers may result 
-                                            in loss of information, whereas larger numbers will increase the runtime. [Default: 10]
-
-
-
-    --hdbscan_metric METRIC                 Distance metric applied by  HDBSCAN.
+                                            If an invalid metric is set, the default is selected. [Default: cosine] 
+    --n_components N_COMPONENTS             This parameter tells UMAP how many dimensions should be used for the embedding.      [Default: 2] 
+    --n_neighbors N_NEIGHBOR S              Number of neighbors considered by UMAP to reduce the dimension space. [Default: 15]
+    --min_dist MIN_DIST                     Sets the threshold for the minimum distance of two points in the low-dimensional space. [Default: 0.1]
+    --hdbscan_metric HDBSCAN_METRIC         Distance metric applied by  HDBSCAN.
                                             The following are supported:
                                             'euclidean', 'manhatten', 'chebyshev', 'minkwoski',
                                             'canberra', 'braycurtis',
@@ -482,13 +486,14 @@ def ClusterHelp() {
                                             'cosine'.
                                             If an invalid metric is set, the default will be selected
                                             [Default: cosine]
-    --min_cluster_size                      This parameter forces HDBSCAN to form cluster with a size larger-equal to CLUSTERSIZE.
+    --min_samples MIN_SAMPLES               Intuitively, this parameter declares how conservative clustering is performed. Higher values will lead 
+                                            to more points considered noise, whereas a low value causes "edge-cases" to be grouped into a cluster.
+                                            The default parameter is the same as CLUSTERSIZE.  [Default: 5] 
+    --min_cluster_size MIN_CLUSTER_SIZE     This parameter forces HDBSCAN to form cluster with a size larger-equal to CLUSTERSIZE.
                                             Be aware that some data points (i.e. genomes) or even whole subcluster are considered as noise, if this parameter is set too high.
                                             E.g., if a very distinct viral genus has 40 genomes and the parameter is set to anything >40, HDBSCAN will not form
-                                            the genus specific cluster. [Default: 5]
-    --min_samples                           Intuitively, this parameter declares how conservative clustering is performed. Higher values will lead 
-                                            to more points considered noise, whereas a low value causes "edge-cases" to be grouped into a cluster.
-                                            The default parameter is the same as CLUSTERSIZE. [Default: CLUSTERSIZE]
-    --cluster_selection_epsilon             A distance threshold. Clusters below this value will be merged. [Default: 0.0]
+                                            the genus specific cluster.        [Default: 5]  
+    --cluster_selection_epsilon CLUSTER_SELECTION_EPSILON               A distance threshold. Clusters below this value will be merged.     [Default: 0.05] 
+
   """.stripIndent()
 }

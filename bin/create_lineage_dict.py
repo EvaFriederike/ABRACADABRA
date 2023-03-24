@@ -4,7 +4,6 @@
 import sys
 import re
 import utils
-# import json
 import pandas as pd
 
 sequenceFile = sys.argv[1]

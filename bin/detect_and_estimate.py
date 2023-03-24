@@ -19,21 +19,6 @@ cluster_muts = df_vcf[["var_key", 'DP']]
 cluster_muts.set_index('var_key', inplace=True)
 cluster_muts = cluster_muts.transpose()
 
-# prepare usher df structure: consider only mutations that were called 
-# update_ref = True
-# if "FP" not in df_usher.columns:
-#     df_usher["FP"] = [0]*len(df_usher)
-#     df_usher_sub = df_usher[[col for col in cluster_muts.columns if col in df_usher.columns]]
-# else:
-#     update_ref = False
-    #print("Removing false positive lineages")
-    #df_usher_sub = df_usher.loc[df_usher["FP"]==0]
-    # df_usher_sub = df_usher_sub.drop('FP', axis=1)  
-    # identify mutations that are now without lineage assignment and remove them from the table of called mutations
-    # since those are now "unknown"
-    #obsolete_vars = [col for col in df_usher_sub.columns if df_usher_sub[col].sum()==0]  
-    #cluster_muts = cluster_muts[[col for col in cluster_muts.columns if col not in obsolete_vars]]
-    #df_usher_sub = df_usher[[col for col in cluster_muts.columns if col in df_usher_sub.columns]]
 if df_usher["FP"].sum() != 0:
     print("Removing false positive lineages")
 df_usher_sub = df_usher.loc[df_usher["FP"]==0]
@@ -92,5 +77,3 @@ df_usher_sub['estimate'] = df_usher_sub.sum(axis=1)
 scaled_cluster_abundances = df_usher_sub.loc[df_usher_sub['estimate']!=0]
 
 scaled_cluster_abundances.to_csv(output, sep='\t')
-# if update_ref:
-#     df_usher.to_csv("mod_"+usher, sep=',')

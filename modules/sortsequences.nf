@@ -85,7 +85,7 @@ process primer_sort {
 }
 
 /**************************************
-Strategy might result in some reads being sorted into 1-3 amplicons,
+Strategy might result in some reads being sorted into more than one amplicon,
 depending on the range of overlap -> check the amount of concerned reads
 Also, seqkit grep detected primer matches that regex finditer didn't...?
 *******************************************/

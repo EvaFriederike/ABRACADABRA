@@ -17,7 +17,7 @@ process primer_clipping {
   """
     #!/bin/bash
 
-    minimap2 -ax map-ont $reference $primer_reads -t $task.cpus > ${primer_name}.sam
+    minimap2 -ax $params.minimap_params $reference $primer_reads -t $task.cpus > ${primer_name}.sam
     samtools view -S -b -h ${primer_name}.sam > ${primer_name}.bam
     samtools sort ${primer_name}.bam > ${primer_name}.sorted.bam
     samtools index ${primer_name}.sorted.bam
