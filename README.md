@@ -123,6 +123,7 @@ ________________________________________________________________________________
 ### Data
 * UShER mutational barcode data frame from Freyja version with commit hash 'a62c7f7e4011eb1de0b3aa67c53b31396805b496'  
 * Spike covering amplicons of the ARTIC V4 panel in example/
+* Subsample of Illumina reads simulated with [SWAMPy](https://github.com/goldman-gp-ebi/SWAMPy) containing B.1.1.7
 
 ### Cluster Tools
 <details><summary>Click here for all citations</summary>
