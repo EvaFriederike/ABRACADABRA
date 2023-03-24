@@ -1,16 +1,15 @@
-
-## <samp>ABACADABRA</samp> - Amplicon-Based Clustering Approach for for lineage Detection and ABundance estimation fRom wAstewater sequencing
+## <samp>ABACADABRA</samp> - Amplicon-Based hieRArchical Clustering Approach for for lineage Detection and ABundance estimation fRom wAstewater sequencing
 ![NextFlow](https://img.shields.io/badge/Nextflow-22.10.1.5828-blue.svg)![conda](https://img.shields.io/badge/Uses-conda-green.svg)
 ***
 
 ### DISCLAIMER
 This pipeline is based on the Nextflow pipeline [ViralClust](https://github.com/klamkiew/viralclust) from  [Kevin Lamkiewicz](https://github.com/klamkiew).
 
-Specific commit version that I reused: https://github.com/klamkiew/viralclust/commit/3203e6de334c6834877dbdffecff70df07ed80d7
+Specific commit version that was reused: https://github.com/klamkiew/viralclust/commit/3203e6de334c6834877dbdffecff70df07ed80d7
 ***
 
 ### Overview: What is this about?
-<samp>ABACADABRA</samp> - Amplicon-Based Clustering Approach for for lineage Detection and ABundance estimation fRom wAstewater sequencing
+<samp>ABACADABRA</samp>
 - Detect known and unknown SARS-CoV-2 lineages from amplicon-based sequencing data
 - Application to wastewater sequencing data or clinical pooling samples.
 ***
@@ -48,20 +47,18 @@ do in the help of message of the pipeline - and at the [end of this file](#help-
 
 
 
-
 ***
 ### Data
 * UShER mutational barcode data frame from Freyja version with commit hash 'a62c7f7e4011eb1de0b3aa67c53b31396805b496'  
+* Spike covering amplicons of the ARTIC V4 panel in example/
+
 ### Cluster Tools
-
-
-
 <details><summary>Click here for all citations</summary>
 
   * UMAP:
     * `McInnes, L, Healy, J, "UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction", ArXiv e-prints 1802.03426, 2018`
   * HDBscan: 
-    * `L. McInnes, J. Healy, S. Astels, "hdbscan: Hierarchical density based clustering" In: Journal of Open Source Software, The Open Journal, volume 2, number 11. 2017`
+    * `Campello, Moulavi, Sander, "Density-Based Clustering Based on Hierarchical Density Estimates" In: Density-Based Clustering Based on Hierarchical Density Estimates, 2013`
 </details>
 
 ***
