@@ -1,19 +1,17 @@
-## <samp>ABACADABRA</samp> - Amplicon-Based hieRArchical Clustering Approach for for lineage Detection and ABundance estimation fRom wAstewater sequencing
+## <samp>ABRACADABRA</samp> - Amplicon-Based hieRArchical Clustering Approach for for lineage Detection and ABundance estimation fRom wAstewater sequencing
 ![NextFlow](https://img.shields.io/badge/Nextflow-22.10.1.5828-blue.svg)![conda](https://img.shields.io/badge/Uses-conda-green.svg)
 ***
 
-
 ### DISCLAIMER
 This pipeline is based on the Nextflow pipeline [ViralClust](https://github.com/klamkiew/viralclust) from  [Kevin Lamkiewicz](https://github.com/klamkiew).
-
 Specific commit version that was reused: https://github.com/klamkiew/viralclust/commit/3203e6de334c6834877dbdffecff70df07ed80d7
 ***
 
 
 ### Overview: What is this about?
-<samp>ABACADABRA</samp>
-- Detect known and unknown SARS-CoV-2 lineages from amplicon-based sequencing data
-- Application to wastewater sequencing data or clinical pooling samples.
+ABRACADABRA was developed for detecting SARS-CoV-2 lineages and estimating abundances from Oxford Nanopore Technologies and Illumina wastewater sequencing data of the spike gene. The tools considers unknown mutations from input samples for detecting genomic signs of novel lineages and  addresses the need for a less reference-dependent appraoch by pushing comparison with known lineage profiles. The goal is to make ABRACADABRA feasible for SARS-CoV-2 genomic wastewater surveillance and clinical pooling.
+
+ABRACDABRA clusters reads on the amplicon level based on their kmer frequencies. Variants are called for each cluster and compared against the UShER mutational barcodes as provided by [Freyja](https://github.com/andersen-lab/Freyja). Lineage assignment ratios are scaled and aggregated across clusters and amplicons.
 ***
 
 
@@ -126,7 +124,7 @@ ________________________________________________________________________________
 * Subsample of Illumina reads simulated with [SWAMPy](https://github.com/goldman-gp-ebi/SWAMPy) containing B.1.1.7
 
 ### Cluster Tools
-<details><summary>Click here for all citations</summary>
+<details><summary>Click here for citations</summary>
 
   * UMAP:
     * `McInnes, L, Healy, J, "UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction", ArXiv e-prints 1802.03426, 2018`
