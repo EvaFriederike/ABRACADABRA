@@ -138,4 +138,4 @@ ________________________________________________________________________________
 
 ### Graphical Workflow
 
-![Workflow graph](/pic/workflow.png)
+![Workflow graph](/pic/ABRACADABRA.png)
